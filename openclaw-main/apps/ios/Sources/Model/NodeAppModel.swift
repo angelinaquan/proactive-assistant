@@ -58,6 +58,7 @@ final class NodeAppModel {
     var connectedGatewayID: String?
     var gatewayAutoReconnectEnabled: Bool = true
     var seamColorHex: String?
+    var avatarImageURL: URL?
     private var mainSessionBaseKey: String = "main"
     var selectedAgentId: String?
     var gatewayDefaultAgentId: String?
@@ -106,7 +107,9 @@ final class NodeAppModel {
     private let motionService: any MotionServicing
     var lastAutoA2uiURL: String?
     private var pttVoiceWakeSuspended = false
+    private var pttAmbientSuspended = false
     private var talkVoiceWakeSuspended = false
+    private var talkAmbientSuspended = false
     private var backgroundVoiceWakeSuspended = false
     private var backgroundTalkSuspended = false
     private var backgroundedAt: Date?
@@ -122,6 +125,12 @@ final class NodeAppModel {
     var cameraHUDKind: CameraHUDKind?
     var cameraFlashNonce: Int = 0
     var screenRecordActive: Bool = false
+
+    // Ambient listening system
+    let ambientStore = AmbientStore()
+    let ambientListening = AmbientListeningManager()
+    @ObservationIgnored private(set) var proactiveExecutor: ProactiveExecutor!
+    private var backgroundAmbientSuspended = false
 
     init(
         screen: ScreenController = ScreenController(),
@@ -149,6 +158,11 @@ final class NodeAppModel {
         self.remindersService = remindersService
         self.motionService = motionService
         self.talkMode = talkMode
+        self.proactiveExecutor = ProactiveExecutor(
+            remindersService: remindersService,
+            calendarService: calendarService,
+            rollbackStore: RollbackStore(),
+            ambientStore: self.ambientStore)
         GatewayDiagnostics.bootstrap()
 
         self.voiceWake.configure { [weak self] cmd in
@@ -167,6 +181,24 @@ final class NodeAppModel {
         let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
         // Route through the coordinator so VoiceWake and Talk don't fight over the microphone.
         self.setTalkEnabled(talkEnabled)
+
+        // Configure ambient listening
+        let ambientServerHost = UserDefaults.standard.string(forKey: "ambient.serverHost") ?? ""
+        let ambientServerPort = UserDefaults.standard.integer(forKey: "ambient.serverPort")
+        let ambientURL: URL? = {
+            let host = ambientServerHost.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !host.isEmpty else { return nil }
+            let port = ambientServerPort > 0 ? ambientServerPort : 8200
+            return URL(string: "ws://\(host):\(port)/ws/ambient")
+        }()
+        self.ambientListening.configure(
+            proactiveExecutor: self.proactiveExecutor,
+            ambientStore: self.ambientStore,
+            serverURL: ambientURL)
+        let ambientEnabled = UserDefaults.standard.bool(forKey: "ambient.enabled")
+        if ambientEnabled {
+            self.ambientListening.setEnabled(true)
+        }
 
         // Wire up deep links from canvas taps
         self.screen.onDeepLink = { [weak self] url in
@@ -273,6 +305,7 @@ final class NodeAppModel {
             // Be conservative: release the mic when the app backgrounds.
             self.backgroundVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
             self.backgroundTalkSuspended = self.talkMode.suspendForBackground()
+            self.backgroundAmbientSuspended = self.ambientListening.suspendForBackground()
         case .active, .inactive:
             self.isBackgrounded = false
             if self.operatorConnected {
@@ -286,6 +319,12 @@ final class NodeAppModel {
                     let suspended = await MainActor.run { self.backgroundTalkSuspended }
                     await MainActor.run { self.backgroundTalkSuspended = false }
                     await self.talkMode.resumeAfterBackground(wasSuspended: suspended)
+                }
+                Task { [weak self] in
+                    guard let self else { return }
+                    let suspended = await MainActor.run { self.backgroundAmbientSuspended }
+                    await MainActor.run { self.backgroundAmbientSuspended = false }
+                    await self.ambientListening.resumeAfterBackground(wasSuspended: suspended)
                 }
             }
             if phase == .active, self.reconnectAfterBackgroundArmed {
@@ -345,10 +384,18 @@ final class NodeAppModel {
             // When talk is enabled from the UI, prioritize talk and pause voice wake.
             self.voiceWake.setSuppressedByTalk(true)
             self.talkVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
+            // Also suspend ambient listening — talk mode has higher priority.
+            self.talkAmbientSuspended = self.ambientListening.suspendForHigherPriority()
         } else {
             self.voiceWake.setSuppressedByTalk(false)
             self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.talkVoiceWakeSuspended)
             self.talkVoiceWakeSuspended = false
+            // Resume ambient listening if it was suspended.
+            Task { [weak self] in
+                guard let self else { return }
+                await self.ambientListening.resumeAfterHigherPriority(wasSuspended: self.talkAmbientSuspended)
+                self.talkAmbientSuspended = false
+            }
         }
         self.talkMode.setEnabled(enabled)
     }
@@ -399,10 +446,14 @@ final class NodeAppModel {
             guard let config = json["config"] as? [String: Any] else { return }
             let ui = config["ui"] as? [String: Any]
             let raw = (ui?["seamColor"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let talk = config["talk"] as? [String: Any]
+            let avatar = talk?["avatar"] as? [String: Any]
+            let avatarURLString = (avatar?["imageUrl"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let session = config["session"] as? [String: Any]
             let mainKey = SessionKey.normalizeMainKey(session?["mainKey"] as? String)
             await MainActor.run {
                 self.seamColorHex = raw.isEmpty ? nil : raw
+                self.avatarImageURL = avatarURLString.isEmpty ? nil : URL(string: avatarURLString)
                 self.mainSessionBaseKey = mainKey
                 self.talkMode.updateMainSessionKey(self.mainSessionKey)
             }
@@ -911,7 +962,13 @@ final class NodeAppModel {
                 OpenClawCameraClipParams()
 
             let suspended = (params.includeAudio ?? true) ? self.voiceWake.suspendForExternalAudioCapture() : false
-            defer { self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: suspended) }
+            let ambientSuspended = (params.includeAudio ?? true) ? self.ambientListening.suspendForHigherPriority() : false
+            defer {
+                self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: suspended)
+                Task { [weak self] in
+                    await self?.ambientListening.resumeAfterHigherPriority(wasSuspended: ambientSuspended)
+                }
+            }
 
             self.showCameraHUD(text: "Recording…", kind: .recording)
             let res = try await self.camera.clip(params: params)
@@ -1243,6 +1300,7 @@ final class NodeAppModel {
         switch req.command {
         case OpenClawTalkCommand.pttStart.rawValue:
             self.pttVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
+            self.pttAmbientSuspended = self.ambientListening.suspendForHigherPriority()
             let payload = try await self.talkMode.beginPushToTalk()
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
@@ -1250,19 +1308,29 @@ final class NodeAppModel {
             let payload = await self.talkMode.endPushToTalk()
             self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
             self.pttVoiceWakeSuspended = false
+            Task { await self.ambientListening.resumeAfterHigherPriority(wasSuspended: self.pttAmbientSuspended) }
+            self.pttAmbientSuspended = false
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         case OpenClawTalkCommand.pttCancel.rawValue:
             let payload = await self.talkMode.cancelPushToTalk()
             self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
             self.pttVoiceWakeSuspended = false
+            Task { await self.ambientListening.resumeAfterHigherPriority(wasSuspended: self.pttAmbientSuspended) }
+            self.pttAmbientSuspended = false
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         case OpenClawTalkCommand.pttOnce.rawValue:
             self.pttVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
+            self.pttAmbientSuspended = self.ambientListening.suspendForHigherPriority()
             defer {
                 self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
                 self.pttVoiceWakeSuspended = false
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.ambientListening.resumeAfterHigherPriority(wasSuspended: self.pttAmbientSuspended)
+                    self.pttAmbientSuspended = false
+                }
             }
             let payload = try await self.talkMode.runPushToTalkOnce()
             let json = try Self.encodePayload(payload)
@@ -1526,6 +1594,7 @@ extension NodeAppModel {
         self.operatorConnected = false
         self.talkMode.updateGatewayConnected(false)
         self.seamColorHex = nil
+        self.avatarImageURL = nil
         self.mainSessionBaseKey = "main"
         self.talkMode.updateMainSessionKey(self.mainSessionKey)
         self.showLocalCanvasOnDisconnect()
@@ -1740,6 +1809,7 @@ private extension NodeAppModel {
                 self.operatorConnected = false
                 self.talkMode.updateGatewayConnected(false)
                 self.seamColorHex = nil
+                self.avatarImageURL = nil
                 self.mainSessionBaseKey = "main"
                 self.talkMode.updateMainSessionKey(self.mainSessionKey)
                 self.showLocalCanvasOnDisconnect()

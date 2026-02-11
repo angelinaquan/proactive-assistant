@@ -22,11 +22,15 @@ struct RootCanvas: View {
     private enum PresentedSheet: Identifiable {
         case settings
         case chat
+        case ambient
+        case videoChat
 
         var id: Int {
             switch self {
             case .settings: 0
             case .chat: 1
+            case .ambient: 2
+            case .videoChat: 3
             }
         }
     }
@@ -45,6 +49,12 @@ struct RootCanvas: View {
                 },
                 openSettings: {
                     self.presentedSheet = .settings
+                },
+                openAmbient: {
+                    self.presentedSheet = .ambient
+                },
+                openVideoChat: {
+                    self.presentedSheet = .videoChat
                 })
                 .preferredColorScheme(.dark)
 
@@ -62,6 +72,13 @@ struct RootCanvas: View {
                     sessionKey: self.appModel.mainSessionKey,
                     agentName: self.appModel.activeAgentName,
                     userAccent: self.appModel.seamColor)
+            case .ambient:
+                AmbientTab(
+                    ambientStore: self.appModel.ambientStore,
+                    proactiveExecutor: self.appModel.proactiveExecutor,
+                    ambientManager: self.appModel.ambientListening)
+            case .videoChat:
+                VideoChatView()
             }
         }
         .onAppear { self.updateIdleTimer() }
@@ -160,6 +177,7 @@ private struct CanvasContent: View {
     @Environment(NodeAppModel.self) private var appModel
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
+    @AppStorage("ambient.enabled") private var ambientEnabled: Bool = false
     @State private var showGatewayActions: Bool = false
     var systemColorScheme: ColorScheme
     var gatewayStatus: StatusPill.GatewayState
@@ -169,6 +187,8 @@ private struct CanvasContent: View {
     var cameraHUDKind: NodeAppModel.CameraHUDKind?
     var openChat: () -> Void
     var openSettings: () -> Void
+    var openAmbient: () -> Void
+    var openVideoChat: () -> Void
 
     private var brightenButtons: Bool { self.systemColorScheme == .light }
 
@@ -196,6 +216,26 @@ private struct CanvasContent: View {
                     }
                     .accessibilityLabel("Talk Mode")
                 }
+
+                // Ambient listening review button with badge
+                OverlayButton(
+                    systemImage: self.ambientEnabled ? "waveform.badge.mic" : "waveform",
+                    brighten: self.brightenButtons,
+                    tint: self.ambientEnabled ? .orange : nil,
+                    isActive: self.ambientEnabled)
+                {
+                    self.openAmbient()
+                }
+                .accessibilityLabel("Ambient Listening")
+
+                // Video chat button
+                OverlayButton(
+                    systemImage: "video.fill",
+                    brighten: self.brightenButtons)
+                {
+                    self.openVideoChat()
+                }
+                .accessibilityLabel("Video Chat")
 
                 OverlayButton(systemImage: "gearshape.fill", brighten: self.brightenButtons) {
                     self.openSettings()
@@ -310,6 +350,22 @@ private struct CanvasContent: View {
                 let suffix = self.appModel.isBackgrounded ? " (background)" : ""
                 return StatusPill.Activity(title: "Voice Wake paused\(suffix)", systemImage: "pause.circle.fill")
             }
+        }
+
+        // Ambient listening status
+        if self.ambientEnabled, self.appModel.ambientListening.isListening {
+            let pendingCount = self.appModel.ambientStore.pendingCount
+            let suffix = pendingCount > 0 ? " (\(pendingCount))" : ""
+            if self.appModel.ambientListening.isPaused {
+                return StatusPill.Activity(
+                    title: "Ambient paused\(suffix)",
+                    systemImage: "pause.circle.fill",
+                    tint: .orange)
+            }
+            return StatusPill.Activity(
+                title: "Ambient listening\(suffix)",
+                systemImage: "waveform.badge.mic",
+                tint: .green)
         }
 
         return nil

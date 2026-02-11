@@ -95,6 +95,32 @@ final class CalendarService: CalendarServicing {
         return OpenClawCalendarAddPayload(event: payload)
     }
 
+    func delete(identifier: String) async throws {
+        let store = EKEventStore()
+        let status = EKEventStore.authorizationStatus(for: .event)
+        let authorized = await Self.ensureWriteAuthorization(store: store, status: status)
+        guard authorized else {
+            throw NSError(domain: "Calendar", code: 10, userInfo: [
+                NSLocalizedDescriptionKey: "CALENDAR_PERMISSION_REQUIRED: grant Calendar permission",
+            ])
+        }
+
+        let trimmedId = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedId.isEmpty else {
+            throw NSError(domain: "Calendar", code: 11, userInfo: [
+                NSLocalizedDescriptionKey: "CALENDAR_INVALID: identifier required",
+            ])
+        }
+
+        guard let event = store.event(withIdentifier: trimmedId) else {
+            throw NSError(domain: "Calendar", code: 12, userInfo: [
+                NSLocalizedDescriptionKey: "CALENDAR_NOT_FOUND: no event with identifier \(trimmedId)",
+            ])
+        }
+
+        try store.remove(event, span: .thisEvent)
+    }
+
     private static func ensureAuthorization(store: EKEventStore, status: EKAuthorizationStatus) async -> Bool {
         switch status {
         case .authorized:
