@@ -114,8 +114,9 @@ final class AmbientWebSocketClient {
                     self.isConnected = false
                     self.onConnectionStateChanged?(false)
                     // Attempt reconnect after delay
-                    Task {
+                    Task { [weak self] in
                         try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        guard let self else { return }
                         if let url = self.serverURL {
                             self.connect(to: url)
                         }

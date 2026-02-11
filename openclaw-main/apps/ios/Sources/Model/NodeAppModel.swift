@@ -107,6 +107,7 @@ final class NodeAppModel {
     var lastAutoA2uiURL: String?
     private var pttVoiceWakeSuspended = false
     private var talkVoiceWakeSuspended = false
+    private var talkAmbientSuspended = false
     private var backgroundVoiceWakeSuspended = false
     private var backgroundTalkSuspended = false
     private var backgroundedAt: Date?
@@ -381,10 +382,18 @@ final class NodeAppModel {
             // When talk is enabled from the UI, prioritize talk and pause voice wake.
             self.voiceWake.setSuppressedByTalk(true)
             self.talkVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
+            // Also suspend ambient listening — talk mode has higher priority.
+            self.talkAmbientSuspended = self.ambientListening.suspendForHigherPriority()
         } else {
             self.voiceWake.setSuppressedByTalk(false)
             self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.talkVoiceWakeSuspended)
             self.talkVoiceWakeSuspended = false
+            // Resume ambient listening if it was suspended.
+            Task { [weak self] in
+                guard let self else { return }
+                await self.ambientListening.resumeAfterHigherPriority(wasSuspended: self.talkAmbientSuspended)
+                self.talkAmbientSuspended = false
+            }
         }
         self.talkMode.setEnabled(enabled)
     }
