@@ -2,7 +2,7 @@
 Ambient Listening Intelligence Server.
 
 FastAPI application that accepts real-time audio via WebSocket,
-transcribes it using WhisperFlow, extracts actionable items using LLM,
+transcribes it using Whisper, extracts actionable items using LLM,
 and returns action plans to the iOS client for proactive execution.
 """
 
@@ -64,7 +64,7 @@ class AmbientSession:
         self._context_window: list[str] = []  # Last N segments for context
 
     async def start_transcription(self) -> None:
-        """Start the WhisperFlow transcription engine."""
+        """Start the transcription engine."""
         self.transcriber = AmbientTranscriber(
             on_transcript=self._on_transcript_sync,
         )

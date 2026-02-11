@@ -1,0 +1,37 @@
+name: AmbientApp
+options:
+  bundleIdPrefix: com.ambient
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "16.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+
+targets:
+  AmbientApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: AmbientApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ambient.app
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+    info:
+      path: AmbientApp/Info.plist
+      properties:
+        CFBundleDisplayName: Ambient
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UIBackgroundModes:
+          - audio
+        NSMicrophoneUsageDescription: Ambient uses your microphone for always-listening speech detection.
+        NSSpeechRecognitionUsageDescription: Ambient uses speech recognition to detect actionable items.
+        NSRemindersUsageDescription: Ambient creates reminders from detected commitments in your conversations.
+        NSCalendarsFullAccessUsageDescription: Ambient creates calendar events from detected meetings in your conversations.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait

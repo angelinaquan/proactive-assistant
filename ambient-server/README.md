@@ -1,95 +1,111 @@
-# Ambient Listening Intelligence Server
+# Ambient Listening Intelligence System
 
-Real-time ambient audio → transcription → action extraction → proactive execution.
-
-## Quick Start
-
-```bash
-# 1. Copy environment config
-cp .env.example .env
-# Edit .env and set your OPENAI_API_KEY
-
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Start the server
-python main.py
-```
-
-The server will start on `http://localhost:8200`.
+A proactive ambient intelligence system. Always-listening iOS app + backend server that captures conversation, extracts actionable items, **immediately executes them** (creates reminders, calendar events), then presents completed actions for user confirmation or undo.
 
 ## Architecture
 
 ```
-iOS App (audio capture)
-    │
-    │ PCM 16kHz mono int16 via WebSocket
-    ▼
 ┌──────────────────────────────────────┐
-│  Ambient Server                      │
+│  iOS App (ambient-server/ios/)       │
+│  ┌────────────┐  ┌───────────────┐  │
+│  │ Audio      │  │ Proactive     │  │
+│  │ Capture    │→ │ Executor      │  │
+│  │ + VAD      │  │ (act first)   │  │
+│  └─────┬──────┘  └───────┬───────┘  │
+│        │ PCM audio        │ Creates  │
+│        │ via WebSocket    │ reminders│
+│        ▼                  ▼          │
+│  ┌────────────────────────────────┐  │
+│  │ Review Timeline + Undo UI     │  │
+│  └────────────────────────────────┘  │
+└────────┼─────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────┐
+│  Server (ambient-server/server/)     │
 │  ┌──────────┐  ┌──────────────────┐ │
-│  │WhisperFlow│→ │ LLM Extraction  │ │
-│  │   STT    │  │ (OpenAI API)    │ │
-│  └──────────┘  └────────┬─────────┘ │
-│                         │            │
-│                ┌────────▼─────────┐  │
-│                │ Action Planner   │  │
-│                │ + Confidence     │  │
-│                │ + Deduplication  │  │
-│                └────────┬─────────┘  │
-│                         │            │
-│                    ActionPlan        │
-│                   (sent to client)   │
+│  │ Whisper   │→ │ LLM Extraction  │ │
+│  │ STT      │  │ + Action Planner│ │
+│  └──────────┘  └──────────────────┘ │
 └──────────────────────────────────────┘
-    │
-    ▼
-iOS App (ProactiveExecutor)
-    → Creates reminder / calendar event
-    → User sees "Done: ..." with Undo button
 ```
 
-## Endpoints
+## Quick Start
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/ws/ambient` | WebSocket | Real-time audio streaming + action plans |
-| `/health` | GET | Server health check |
-| `/items` | GET | List all detected action plans |
-| `/items/{id}/feedback` | POST | Submit keep/undo/discard feedback |
+### Server
 
-## WebSocket Protocol
+```bash
+# Setup and test
+cp .env.example .env       # Set OPENAI_API_KEY
+./run.sh -local            # Create venv, install deps, run tests
 
-### Client → Server
-
-**Binary messages**: PCM audio chunks (16kHz, mono, int16)
-
-**JSON messages**:
-```json
-{"type": "pause"}
-{"type": "resume"}
-{"type": "feedback", "payload": {"action_plan_id": "...", "action": "keep|undo|discard|execute"}}
+# Or manually:
+cd server
+pip install -r ../requirements.txt
+python3 -m pytest tests/ -v
+python3 main.py            # Starts on port 8200
 ```
 
-### Server → Client
+### iOS App
 
-```json
-{"type": "transcript", "payload": {"text": "...", "is_partial": true, "latency_ms": 123.4}}
-{"type": "action_plan", "payload": { /* ActionPlan object */ }}
-{"type": "error", "payload": {"message": "..."}}
+```bash
+# Generate Xcode project (requires XcodeGen)
+cd ios
+xcodegen generate
+
+# Open in Xcode
+open AmbientApp.xcodeproj
 ```
+
+In the app:
+1. Settings → enter server host (e.g. `192.168.1.100`) and port (`8200`)
+2. Enable "Ambient Listening"
+3. Speak naturally — detected actions appear in the timeline
+4. Auto-executed items show Keep/Undo buttons (30-minute undo window)
+
+## Structure
+
+```
+ambient-server/
+├── server/                     # Python backend (self-contained)
+│   ├── main.py                 # FastAPI WebSocket server
+│   ├── transcription.py        # Whisper STT (inlined, no external deps)
+│   ├── extraction.py           # LLM action extraction
+│   ├── action_planner.py       # Confidence scoring + action planning
+│   ├── confidence.py           # Auto-execute threshold logic
+│   ├── models.py               # Pydantic data models
+│   ├── config.py               # Configuration
+│   ├── models/tiny.en.pt       # Whisper model file
+│   └── tests/                  # 52 unit tests
+├── ios/                        # Standalone iOS app
+│   ├── project.yml             # XcodeGen project config
+│   └── AmbientApp/
+│       ├── App.swift           # Entry point
+│       ├── AppModel.swift      # Central app model
+│       ├── ContentView.swift   # Main UI + settings
+│       ├── Models/             # AmbientActionItem
+│       ├── Services/           # RemindersService, CalendarService
+│       ├── Ambient/            # Core: Manager, WebSocket, Store, Executor
+│       └── Views/              # Timeline, Detail, Avatar, VideoChat
+├── requirements.txt
+├── run.sh
+├── .env.example
+└── README.md
+```
+
+## How It Works
+
+1. **Hear**: iOS app captures audio, applies VAD, streams speech to server
+2. **Transcribe**: Server runs Whisper STT in real-time
+3. **Extract**: LLM identifies tasks, reminders, commitments, deadlines
+4. **Act**: High-confidence items (≥80%) auto-create reminders/calendar events
+5. **Review**: User sees "✅ Created reminder: X" with Keep/Undo buttons
+6. **Undo**: One tap to reverse within 30-minute window
 
 ## Configuration
 
-See `.env.example` for all configuration options.
-
-Key settings:
-- `AUTO_EXECUTE_THRESHOLD=0.8` — Actions above this confidence are auto-executed
-- `SUGGESTION_THRESHOLD=0.5` — Actions above this are shown as suggestions
-- `TRANSCRIPT_BUFFER_SECONDS=45` — How much transcript to accumulate before extraction
-- `UNDO_WINDOW_SECONDS=1800` — How long users can undo (30 min default)
-
-## Dependencies
-
-- **WhisperFlow** (included in repo at `whisper-flow-main/`) — Streaming speech-to-text
-- **OpenAI API** — LLM extraction of actionable items from conversation
-- **FastAPI + uvicorn** — WebSocket server
+See `.env.example` for all server settings:
+- `AUTO_EXECUTE_THRESHOLD=0.8` — Minimum confidence for auto-execution
+- `SUGGESTION_THRESHOLD=0.5` — Minimum confidence to show as suggestion
+- `UNDO_WINDOW_SECONDS=1800` — Undo window (30 min default)
+- `TRANSCRIPT_BUFFER_SECONDS=45` — Transcript accumulation before extraction
