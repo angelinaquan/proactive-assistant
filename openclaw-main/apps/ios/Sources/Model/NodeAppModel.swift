@@ -126,11 +126,7 @@ final class NodeAppModel {
     // Ambient listening system
     let ambientStore = AmbientStore()
     let ambientListening = AmbientListeningManager()
-    private(set) lazy var proactiveExecutor = ProactiveExecutor(
-        remindersService: self.remindersService,
-        calendarService: self.calendarService,
-        rollbackStore: RollbackStore(),
-        ambientStore: self.ambientStore)
+    @ObservationIgnored private(set) var proactiveExecutor: ProactiveExecutor!
     private var backgroundAmbientSuspended = false
 
     init(
@@ -159,6 +155,11 @@ final class NodeAppModel {
         self.remindersService = remindersService
         self.motionService = motionService
         self.talkMode = talkMode
+        self.proactiveExecutor = ProactiveExecutor(
+            remindersService: remindersService,
+            calendarService: calendarService,
+            rollbackStore: RollbackStore(),
+            ambientStore: self.ambientStore)
         GatewayDiagnostics.bootstrap()
 
         self.voiceWake.configure { [weak self] cmd in

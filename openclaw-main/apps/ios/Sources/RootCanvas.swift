@@ -352,6 +352,22 @@ private struct CanvasContent: View {
             }
         }
 
+        // Ambient listening status
+        if self.ambientEnabled, self.appModel.ambientListening.isListening {
+            let pendingCount = self.appModel.ambientStore.pendingCount
+            let suffix = pendingCount > 0 ? " (\(pendingCount))" : ""
+            if self.appModel.ambientListening.isPaused {
+                return StatusPill.Activity(
+                    title: "Ambient paused\(suffix)",
+                    systemImage: "pause.circle.fill",
+                    tint: .orange)
+            }
+            return StatusPill.Activity(
+                title: "Ambient listening\(suffix)",
+                systemImage: "waveform.badge.mic",
+                tint: .green)
+        }
+
         return nil
     }
 }
