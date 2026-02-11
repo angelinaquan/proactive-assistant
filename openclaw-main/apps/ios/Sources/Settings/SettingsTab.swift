@@ -248,6 +248,7 @@ struct SettingsTab: View {
                     Section {
                         Toggle("Ambient Listening", isOn: self.$ambientEnabled)
                             .onChange(of: self.ambientEnabled) { _, newValue in
+                                self.reconfigureAmbientServer()
                                 self.appModel.ambientListening.setEnabled(newValue)
                             }
 
@@ -255,6 +256,7 @@ struct SettingsTab: View {
                             TextField("Server Host", text: self.$ambientServerHost)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
+                                .onSubmit { self.reconfigureAmbientServer() }
 
                             HStack {
                                 Text("Server Port")
@@ -263,6 +265,7 @@ struct SettingsTab: View {
                                     .multilineTextAlignment(.trailing)
                                     .frame(width: 80)
                                     .keyboardType(.numberPad)
+                                    .onSubmit { self.reconfigureAmbientServer() }
                             }
 
                             Toggle("Auto-Execute Actions", isOn: self.$ambientAutoExecute)
@@ -517,6 +520,17 @@ struct SettingsTab: View {
 
     private var locationMode: OpenClawLocationMode {
         OpenClawLocationMode(rawValue: self.locationEnabledModeRaw) ?? .off
+    }
+
+    private func reconfigureAmbientServer() {
+        let host = self.ambientServerHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else { return }
+        let port = self.ambientServerPort > 0 ? self.ambientServerPort : 8200
+        guard let url = URL(string: "ws://\(host):\(port)/ws/ambient") else { return }
+        self.appModel.ambientListening.configure(
+            proactiveExecutor: self.appModel.proactiveExecutor,
+            ambientStore: self.appModel.ambientStore,
+            serverURL: url)
     }
 
     private func appVersion() -> String {

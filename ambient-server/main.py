@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -59,7 +59,7 @@ class AmbientSession:
         self.action_plans: dict[str, ActionPlan] = {}
         self.transcript_history: list[str] = []
         self.is_paused = False
-        self.created_at = datetime.utcnow()
+        self.created_at = datetime.now(timezone.utc)
         self._extraction_lock = asyncio.Lock()
         self._context_window: list[str] = []  # Last N segments for context
 
@@ -164,18 +164,18 @@ class AmbientSession:
 
         if feedback.action == FeedbackAction.KEEP:
             plan.execution_status = ExecutionStatus.CONFIRMED
-            plan.confirmed_at = datetime.utcnow()
+            plan.confirmed_at = datetime.now(timezone.utc)
         elif feedback.action == FeedbackAction.UNDO:
             plan.execution_status = ExecutionStatus.UNDONE
-            plan.undone_at = datetime.utcnow()
+            plan.undone_at = datetime.now(timezone.utc)
         elif feedback.action == FeedbackAction.EDIT:
             if feedback.edited_params:
                 plan.action_params.update(feedback.edited_params)
             plan.execution_status = ExecutionStatus.CONFIRMED
-            plan.confirmed_at = datetime.utcnow()
+            plan.confirmed_at = datetime.now(timezone.utc)
         elif feedback.action == FeedbackAction.DISCARD:
             plan.execution_status = ExecutionStatus.UNDONE
-            plan.undone_at = datetime.utcnow()
+            plan.undone_at = datetime.now(timezone.utc)
         elif feedback.action == FeedbackAction.EXECUTE:
             plan.auto_execute = True
             plan.execution_status = ExecutionStatus.PENDING

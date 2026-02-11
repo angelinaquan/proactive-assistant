@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from config import config
 from confidence import score_extraction
@@ -95,7 +95,7 @@ class ActionPlanner:
                 action_description=action_description,
                 action_params=action_params,
                 execution_status=ExecutionStatus.PENDING,
-                detected_at=datetime.utcnow(),
+                detected_at=datetime.now(timezone.utc),
                 people=item.people,
                 deadline=item.deadline,
                 undo_window_seconds=config.UNDO_WINDOW_SECONDS,
@@ -127,12 +127,12 @@ class ActionPlanner:
             return params.model_dump(exclude_none=True)
 
         elif item.type == ActionType.CALENDAR_EVENT:
-            start_iso = item.deadline or datetime.utcnow().isoformat()
+            start_iso = item.deadline or datetime.now(timezone.utc).isoformat()
             # Default 1-hour event
             try:
                 start_dt = datetime.fromisoformat(start_iso)
             except (ValueError, TypeError):
-                start_dt = datetime.utcnow() + timedelta(hours=1)
+                start_dt = datetime.now(timezone.utc) + timedelta(hours=1)
             end_dt = start_dt + timedelta(hours=1)
 
             params = CalendarEventParams(

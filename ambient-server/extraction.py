@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from openai import AsyncOpenAI
 
@@ -113,7 +113,7 @@ async def extract_actions(
         return ExtractionResult(
             items=items,
             transcript_segment=transcript,
-            processed_at=datetime.utcnow(),
+            processed_at=datetime.now(timezone.utc),
         )
 
     except Exception as e:

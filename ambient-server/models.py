@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class ActionType(str, Enum):
@@ -62,7 +66,7 @@ class ExtractionResult(BaseModel):
 
     items: list[ExtractedItem] = Field(default_factory=list)
     transcript_segment: str = ""
-    processed_at: datetime = Field(default_factory=datetime.utcnow)
+    processed_at: datetime = Field(default_factory=_utcnow)
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +121,7 @@ class ActionPlan(BaseModel):
 
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     type: ActionType
-    confidence: float = Field(ge=0.0, le=1.0)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     confidence_level: ConfidenceLevel = ConfidenceLevel.LOW
     auto_execute: bool = False
 
@@ -135,7 +139,7 @@ class ActionPlan(BaseModel):
     execution_result: dict[str, Any] | None = None  # { identifier: ... }
 
     # Timestamps
-    detected_at: datetime = Field(default_factory=datetime.utcnow)
+    detected_at: datetime = Field(default_factory=_utcnow)
     confirmed_at: datetime | None = None
     undone_at: datetime | None = None
 
@@ -157,7 +161,7 @@ class TranscriptSegment(BaseModel):
 
     text: str
     is_partial: bool = True
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_utcnow)
     latency_ms: float | None = None
 
 
@@ -187,7 +191,7 @@ class WSMessage(BaseModel):
 
     type: WSMessageType
     payload: dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_utcnow)
 
 
 # ---------------------------------------------------------------------------
