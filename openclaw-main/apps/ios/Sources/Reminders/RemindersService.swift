@@ -100,41 +100,6 @@ final class RemindersService: RemindersServicing {
         return OpenClawRemindersAddPayload(reminder: payload)
     }
 
-    func delete(identifier: String) async throws {
-        let store = EKEventStore()
-        let status = EKEventStore.authorizationStatus(for: .reminder)
-        let authorized = await Self.ensureWriteAuthorization(store: store, status: status)
-        guard authorized else {
-            throw NSError(domain: "Reminders", code: 10, userInfo: [
-                NSLocalizedDescriptionKey: "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission",
-            ])
-        }
-
-        let trimmedId = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedId.isEmpty else {
-            throw NSError(domain: "Reminders", code: 11, userInfo: [
-                NSLocalizedDescriptionKey: "REMINDERS_INVALID: identifier required",
-            ])
-        }
-
-        // Fetch all reminders and find the one with the matching identifier
-        let predicate = store.predicateForReminders(in: nil)
-        let reminder: EKReminder? = try await withCheckedThrowingContinuation { cont in
-            store.fetchReminders(matching: predicate) { items in
-                let match = (items ?? []).first { $0.calendarItemIdentifier == trimmedId }
-                cont.resume(returning: match)
-            }
-        }
-
-        guard let reminder else {
-            throw NSError(domain: "Reminders", code: 12, userInfo: [
-                NSLocalizedDescriptionKey: "REMINDERS_NOT_FOUND: no reminder with identifier \(trimmedId)",
-            ])
-        }
-
-        try store.remove(reminder, commit: true)
-    }
-
     private static func ensureAuthorization(store: EKEventStore, status: EKAuthorizationStatus) async -> Bool {
         switch status {
         case .authorized:
