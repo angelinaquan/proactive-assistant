@@ -123,6 +123,16 @@ final class NodeAppModel {
     var cameraFlashNonce: Int = 0
     var screenRecordActive: Bool = false
 
+    // Ambient listening system
+    let ambientStore = AmbientStore()
+    let ambientListening = AmbientListeningManager()
+    private(set) lazy var proactiveExecutor = ProactiveExecutor(
+        remindersService: self.remindersService,
+        calendarService: self.calendarService,
+        rollbackStore: RollbackStore(),
+        ambientStore: self.ambientStore)
+    private var backgroundAmbientSuspended = false
+
     init(
         screen: ScreenController = ScreenController(),
         camera: any CameraServicing = CameraController(),
@@ -167,6 +177,24 @@ final class NodeAppModel {
         let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
         // Route through the coordinator so VoiceWake and Talk don't fight over the microphone.
         self.setTalkEnabled(talkEnabled)
+
+        // Configure ambient listening
+        let ambientServerHost = UserDefaults.standard.string(forKey: "ambient.serverHost") ?? ""
+        let ambientServerPort = UserDefaults.standard.integer(forKey: "ambient.serverPort")
+        let ambientURL: URL? = {
+            let host = ambientServerHost.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !host.isEmpty else { return nil }
+            let port = ambientServerPort > 0 ? ambientServerPort : 8200
+            return URL(string: "ws://\(host):\(port)/ws/ambient")
+        }()
+        self.ambientListening.configure(
+            proactiveExecutor: self.proactiveExecutor,
+            ambientStore: self.ambientStore,
+            serverURL: ambientURL)
+        let ambientEnabled = UserDefaults.standard.bool(forKey: "ambient.enabled")
+        if ambientEnabled {
+            self.ambientListening.setEnabled(true)
+        }
 
         // Wire up deep links from canvas taps
         self.screen.onDeepLink = { [weak self] url in
@@ -273,6 +301,7 @@ final class NodeAppModel {
             // Be conservative: release the mic when the app backgrounds.
             self.backgroundVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
             self.backgroundTalkSuspended = self.talkMode.suspendForBackground()
+            self.backgroundAmbientSuspended = self.ambientListening.suspendForBackground()
         case .active, .inactive:
             self.isBackgrounded = false
             if self.operatorConnected {
@@ -286,6 +315,12 @@ final class NodeAppModel {
                     let suspended = await MainActor.run { self.backgroundTalkSuspended }
                     await MainActor.run { self.backgroundTalkSuspended = false }
                     await self.talkMode.resumeAfterBackground(wasSuspended: suspended)
+                }
+                Task { [weak self] in
+                    guard let self else { return }
+                    let suspended = await MainActor.run { self.backgroundAmbientSuspended }
+                    await MainActor.run { self.backgroundAmbientSuspended = false }
+                    await self.ambientListening.resumeAfterBackground(wasSuspended: suspended)
                 }
             }
             if phase == .active, self.reconnectAfterBackgroundArmed {
