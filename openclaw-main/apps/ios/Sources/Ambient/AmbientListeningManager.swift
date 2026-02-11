@@ -196,9 +196,10 @@ final class AmbientListeningManager: NSObject {
         input.removeTap(onBus: 0)
         // Audio tap callback runs on a real-time audio thread.
         // Keep processing lightweight (VAD + send) without dispatching every buffer to MainActor.
-        let sendChunk: @Sendable (Data) -> Void = { [weak self] data in
-            guard let self else { return }
-            self.wsClient.sendAudioChunk(data)
+        // Capture wsClient directly — sendAudioChunk is nonisolated and thread-safe.
+        let client = self.wsClient
+        let sendChunk: @Sendable (Data) -> Void = { data in
+            client.sendAudioChunk(data)
         }
         let vadState = VADState()
         input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
