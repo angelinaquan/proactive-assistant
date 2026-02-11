@@ -106,6 +106,7 @@ final class NodeAppModel {
     private let motionService: any MotionServicing
     var lastAutoA2uiURL: String?
     private var pttVoiceWakeSuspended = false
+    private var pttAmbientSuspended = false
     private var talkVoiceWakeSuspended = false
     private var talkAmbientSuspended = false
     private var backgroundVoiceWakeSuspended = false
@@ -956,7 +957,13 @@ final class NodeAppModel {
                 OpenClawCameraClipParams()
 
             let suspended = (params.includeAudio ?? true) ? self.voiceWake.suspendForExternalAudioCapture() : false
-            defer { self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: suspended) }
+            let ambientSuspended = (params.includeAudio ?? true) ? self.ambientListening.suspendForHigherPriority() : false
+            defer {
+                self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: suspended)
+                Task { [weak self] in
+                    await self?.ambientListening.resumeAfterHigherPriority(wasSuspended: ambientSuspended)
+                }
+            }
 
             self.showCameraHUD(text: "Recording…", kind: .recording)
             let res = try await self.camera.clip(params: params)
@@ -1288,6 +1295,7 @@ final class NodeAppModel {
         switch req.command {
         case OpenClawTalkCommand.pttStart.rawValue:
             self.pttVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
+            self.pttAmbientSuspended = self.ambientListening.suspendForHigherPriority()
             let payload = try await self.talkMode.beginPushToTalk()
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
@@ -1295,19 +1303,29 @@ final class NodeAppModel {
             let payload = await self.talkMode.endPushToTalk()
             self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
             self.pttVoiceWakeSuspended = false
+            Task { await self.ambientListening.resumeAfterHigherPriority(wasSuspended: self.pttAmbientSuspended) }
+            self.pttAmbientSuspended = false
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         case OpenClawTalkCommand.pttCancel.rawValue:
             let payload = await self.talkMode.cancelPushToTalk()
             self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
             self.pttVoiceWakeSuspended = false
+            Task { await self.ambientListening.resumeAfterHigherPriority(wasSuspended: self.pttAmbientSuspended) }
+            self.pttAmbientSuspended = false
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         case OpenClawTalkCommand.pttOnce.rawValue:
             self.pttVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
+            self.pttAmbientSuspended = self.ambientListening.suspendForHigherPriority()
             defer {
                 self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
                 self.pttVoiceWakeSuspended = false
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.ambientListening.resumeAfterHigherPriority(wasSuspended: self.pttAmbientSuspended)
+                    self.pttAmbientSuspended = false
+                }
             }
             let payload = try await self.talkMode.runPushToTalkOnce()
             let json = try Self.encodePayload(payload)

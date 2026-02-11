@@ -32,14 +32,6 @@ final class AmbientListeningManager: NSObject {
     private var ambientStore: AmbientStore?
     private var autoConfirmTask: Task<Void, Never>?
 
-    // VAD (Voice Activity Detection)
-    private var noiseFloorSamples: [Double] = []
-    private var noiseFloor: Double?
-    private var noiseFloorReady = false
-    private let vadThresholdOffset: Double = 0.12
-    private var lastSpeechDetectedAt: Date?
-    private let silenceTimeout: TimeInterval = 2.0
-
     // Server configuration
     private var serverURL: URL?
 
@@ -202,11 +194,19 @@ final class AmbientListeningManager: NSObject {
         }
 
         input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
+        // Audio tap callback runs on a real-time audio thread.
+        // Keep processing lightweight (VAD + send) without dispatching every buffer to MainActor.
+        let sendChunk: @Sendable (Data) -> Void = { [weak self] data in
             guard let self else { return }
-            Task { @MainActor in
-                self.processAudioBuffer(buffer)
-            }
+            self.wsClient.sendAudioChunk(data)
+        }
+        let vadState = VADState()
+        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
+            guard self != nil else { return }
+            Self.processAudioBufferOffMain(
+                buffer: buffer,
+                vadState: vadState,
+                sendChunk: sendChunk)
         }
         self.inputTapInstalled = true
 
@@ -222,14 +222,18 @@ final class AmbientListeningManager: NSObject {
         self.audioEngine.stop()
     }
 
-    private func processAudioBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard !self.isPaused else { return }
-
-        // Calculate RMS for VAD
+    /// Process an audio buffer on the audio thread (non-MainActor).
+    /// Performs VAD and PCM conversion without blocking the main thread.
+    private nonisolated static func processAudioBufferOffMain(
+        buffer: AVAudioPCMBuffer,
+        vadState: VADState,
+        sendChunk: @Sendable (Data) -> Void)
+    {
         guard let data = buffer.floatChannelData?.pointee else { return }
         let frameCount = Int(buffer.frameLength)
         guard frameCount > 0 else { return }
 
+        // Calculate RMS for VAD
         var sum: Float = 0
         for i in 0..<frameCount {
             let v = data[i]
@@ -238,56 +242,59 @@ final class AmbientListeningManager: NSObject {
         let rms = Double(sqrt(sum / Float(frameCount)))
 
         // Dynamic noise floor calibration
-        if !self.noiseFloorReady {
-            self.noiseFloorSamples.append(rms)
-            if self.noiseFloorSamples.count >= 20 {
-                let sorted = self.noiseFloorSamples.sorted()
+        vadState.lock.lock()
+        if !vadState.noiseFloorReady {
+            vadState.noiseFloorSamples.append(rms)
+            if vadState.noiseFloorSamples.count >= 20 {
+                let sorted = vadState.noiseFloorSamples.sorted()
                 let take = max(5, sorted.count / 2)
                 let avg = sorted.prefix(take).reduce(0.0, +) / Double(take)
-                self.noiseFloor = avg
-                self.noiseFloorReady = true
-                self.noiseFloorSamples.removeAll(keepingCapacity: true)
+                vadState.noiseFloor = avg
+                vadState.noiseFloorReady = true
+                vadState.noiseFloorSamples.removeAll(keepingCapacity: true)
             }
         }
 
-        // VAD: only stream audio with detected speech
         let threshold: Double
-        if let floor = self.noiseFloor, self.noiseFloorReady {
-            threshold = min(0.35, max(0.08, floor + self.vadThresholdOffset))
+        if let floor = vadState.noiseFloor, vadState.noiseFloorReady {
+            threshold = min(0.35, max(0.08, floor + 0.12))
         } else {
             threshold = 0.15
         }
 
+        let now = Date()
+        let shouldSend: Bool
         if rms >= threshold {
-            self.lastSpeechDetectedAt = Date()
-            // Convert to 16kHz mono int16 PCM and send
-            let pcmData = self.convertToPCM16(buffer: buffer)
-            if let pcmData {
-                self.wsClient.sendAudioChunk(pcmData)
-            }
-        } else if let lastSpeech = self.lastSpeechDetectedAt,
-                  Date().timeIntervalSince(lastSpeech) < self.silenceTimeout
+            vadState.lastSpeechDetectedAt = now
+            shouldSend = true
+        } else if let lastSpeech = vadState.lastSpeechDetectedAt,
+                  now.timeIntervalSince(lastSpeech) < 2.0
         {
-            // Continue sending for a short window after speech ends
-            let pcmData = self.convertToPCM16(buffer: buffer)
-            if let pcmData {
-                self.wsClient.sendAudioChunk(pcmData)
-            }
+            shouldSend = true
+        } else {
+            shouldSend = false
+        }
+        vadState.lock.unlock()
+
+        guard shouldSend else { return }
+
+        // Convert to 16kHz mono int16 PCM
+        if let pcmData = convertToPCM16(buffer: buffer) {
+            sendChunk(pcmData)
         }
     }
 
-    private func convertToPCM16(buffer: AVAudioPCMBuffer) -> Data? {
+    private nonisolated static func convertToPCM16(buffer: AVAudioPCMBuffer) -> Data? {
         guard let floatData = buffer.floatChannelData?.pointee else { return nil }
         let frameCount = Int(buffer.frameLength)
         guard frameCount > 0 else { return nil }
 
-        // Simple downsampling to 16kHz if needed
         let sourceSampleRate = buffer.format.sampleRate
         let targetSampleRate = 16000.0
         let ratio = sourceSampleRate / targetSampleRate
         let outputFrames = Int(Double(frameCount) / ratio)
 
-        var pcmData = Data(count: outputFrames * 2) // 16-bit = 2 bytes
+        var pcmData = Data(count: outputFrames * 2)
         pcmData.withUnsafeMutableBytes { ptr in
             let int16Ptr = ptr.bindMemory(to: Int16.self)
             for i in 0..<outputFrames {
@@ -377,4 +384,16 @@ final class AmbientListeningManager: NSObject {
             return false
         }
     }
+}
+
+// MARK: - VADState
+
+/// Thread-safe voice activity detection state, used from the audio tap callback.
+/// Accessed from the real-time audio thread, protected by NSLock.
+private final class VADState: @unchecked Sendable {
+    let lock = NSLock()
+    var noiseFloorSamples: [Double] = []
+    var noiseFloor: Double?
+    var noiseFloorReady = false
+    var lastSpeechDetectedAt: Date?
 }
