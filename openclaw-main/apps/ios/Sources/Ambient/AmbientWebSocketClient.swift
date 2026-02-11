@@ -19,6 +19,9 @@ final class AmbientWebSocketClient {
     private var isConnected = false
     private var serverURL: URL?
 
+    /// Thread-safe reference to the active WebSocket task for audio sending from the audio thread.
+    private let audioSendTask = WebSocketTaskRef()
+
     // MARK: - Connection
 
     func connect(to url: URL) {
@@ -27,6 +30,7 @@ final class AmbientWebSocketClient {
         self.session = URLSession(configuration: .default)
         self.webSocketTask = self.session?.webSocketTask(with: url)
         self.webSocketTask?.resume()
+        self.audioSendTask.set(self.webSocketTask)
         self.isConnected = true
         self.onConnectionStateChanged?(true)
         self.logger.info("Connecting to ambient server: \(url.absoluteString, privacy: .public)")
@@ -34,6 +38,7 @@ final class AmbientWebSocketClient {
     }
 
     func disconnect() {
+        self.audioSendTask.set(nil)
         self.webSocketTask?.cancel(with: .goingAway, reason: nil)
         self.webSocketTask = nil
         self.session?.invalidateAndCancel()
@@ -47,16 +52,10 @@ final class AmbientWebSocketClient {
     // MARK: - Send
 
     /// Send a PCM audio chunk to the server.
-    func sendAudioChunk(_ data: Data) {
-        guard self.isConnected else { return }
+    /// This method is nonisolated so it can be called safely from the real-time audio thread.
+    nonisolated func sendAudioChunk(_ data: Data) {
         let message = URLSessionWebSocketTask.Message.data(data)
-        self.webSocketTask?.send(message) { [weak self] error in
-            if let error {
-                Task { @MainActor in
-                    self?.logger.error("Send audio failed: \(error.localizedDescription, privacy: .public)")
-                }
-            }
-        }
+        self.audioSendTask.send(message)
     }
 
     /// Send a pause command to the server.
@@ -183,5 +182,27 @@ final class AmbientWebSocketClient {
             self.logger.error("Failed to parse action plan: \(error.localizedDescription, privacy: .public)")
             return nil
         }
+    }
+}
+
+// MARK: - WebSocketTaskRef
+
+/// Thread-safe wrapper around a `URLSessionWebSocketTask` reference.
+/// Allows the real-time audio thread to send data without hopping to MainActor.
+private final class WebSocketTaskRef: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: URLSessionWebSocketTask?
+
+    func set(_ task: URLSessionWebSocketTask?) {
+        self.lock.lock()
+        self.task = task
+        self.lock.unlock()
+    }
+
+    func send(_ message: URLSessionWebSocketTask.Message) {
+        self.lock.lock()
+        let task = self.task
+        self.lock.unlock()
+        task?.send(message) { _ in }
     }
 }
