@@ -58,6 +58,7 @@ final class NodeAppModel {
     var connectedGatewayID: String?
     var gatewayAutoReconnectEnabled: Bool = true
     var seamColorHex: String?
+    var avatarImageURL: URL?
     private var mainSessionBaseKey: String = "main"
     var selectedAgentId: String?
     var gatewayDefaultAgentId: String?
@@ -445,10 +446,14 @@ final class NodeAppModel {
             guard let config = json["config"] as? [String: Any] else { return }
             let ui = config["ui"] as? [String: Any]
             let raw = (ui?["seamColor"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let talk = config["talk"] as? [String: Any]
+            let avatar = talk?["avatar"] as? [String: Any]
+            let avatarURLString = (avatar?["imageUrl"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let session = config["session"] as? [String: Any]
             let mainKey = SessionKey.normalizeMainKey(session?["mainKey"] as? String)
             await MainActor.run {
                 self.seamColorHex = raw.isEmpty ? nil : raw
+                self.avatarImageURL = avatarURLString.isEmpty ? nil : URL(string: avatarURLString)
                 self.mainSessionBaseKey = mainKey
                 self.talkMode.updateMainSessionKey(self.mainSessionKey)
             }
@@ -1589,6 +1594,7 @@ extension NodeAppModel {
         self.operatorConnected = false
         self.talkMode.updateGatewayConnected(false)
         self.seamColorHex = nil
+        self.avatarImageURL = nil
         self.mainSessionBaseKey = "main"
         self.talkMode.updateMainSessionKey(self.mainSessionKey)
         self.showLocalCanvasOnDisconnect()
@@ -1803,6 +1809,7 @@ private extension NodeAppModel {
                 self.operatorConnected = false
                 self.talkMode.updateGatewayConnected(false)
                 self.seamColorHex = nil
+                self.avatarImageURL = nil
                 self.mainSessionBaseKey = "main"
                 self.talkMode.updateMainSessionKey(self.mainSessionKey)
                 self.showLocalCanvasOnDisconnect()

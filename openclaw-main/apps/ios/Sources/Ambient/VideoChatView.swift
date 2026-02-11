@@ -37,7 +37,7 @@ struct VideoChatView: View {
                     isListening: self.appModel.talkMode.isListening,
                     statusText: self.appModel.talkMode.statusText,
                     agentName: self.appModel.activeAgentName,
-                    avatarImageURL: nil, // TODO: load from gateway config
+                    avatarImageURL: self.appModel.avatarImageURL,
                     accentColor: self.appModel.seamColor)
 
                 Spacer()
