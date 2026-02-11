@@ -15,10 +15,6 @@ struct SettingsTab: View {
     @AppStorage("voiceWake.enabled") private var voiceWakeEnabled: Bool = false
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
-    @AppStorage("ambient.enabled") private var ambientEnabled: Bool = false
-    @AppStorage("ambient.serverHost") private var ambientServerHost: String = ""
-    @AppStorage("ambient.serverPort") private var ambientServerPort: Int = 8200
-    @AppStorage("ambient.autoExecute") private var ambientAutoExecute: Bool = true
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
     @AppStorage("location.enabledMode") private var locationEnabledModeRaw: String = OpenClawLocationMode.off.rawValue
     @AppStorage("location.preciseEnabled") private var locationPreciseEnabled: Bool = true
@@ -241,52 +237,7 @@ struct SettingsTab: View {
                             }
                         // Keep this separate so users can hide the side bubble without disabling Talk Mode.
                         Toggle("Show Talk Button", isOn: self.$talkButtonEnabled)
-                    } header: {
-                        Text("Voice")
-                    }
 
-                    Section {
-                        Toggle("Ambient Listening", isOn: self.$ambientEnabled)
-                            .onChange(of: self.ambientEnabled) { _, newValue in
-                                self.reconfigureAmbientServer()
-                                self.appModel.ambientListening.setEnabled(newValue)
-                            }
-
-                        if self.ambientEnabled {
-                            TextField("Server Host", text: self.$ambientServerHost)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .onSubmit { self.reconfigureAmbientServer() }
-
-                            HStack {
-                                Text("Server Port")
-                                Spacer()
-                                TextField("8200", value: self.$ambientServerPort, format: .number)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(width: 80)
-                                    .keyboardType(.numberPad)
-                                    .onSubmit { self.reconfigureAmbientServer() }
-                            }
-
-                            Toggle("Auto-Execute Actions", isOn: self.$ambientAutoExecute)
-
-                            Text("When enabled, high-confidence actions (reminders, calendar events) are created automatically. You can undo within 30 minutes.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-
-                            LabeledContent("Status", value: self.appModel.ambientListening.statusText)
-
-                            LabeledContent("Pending Actions", value: "\(self.appModel.ambientStore.pendingCount)")
-                        }
-                    } header: {
-                        Text("Ambient Intelligence")
-                    } footer: {
-                        if self.ambientEnabled {
-                            Text("Ambient listening captures conversation in the background and proactively creates reminders and calendar events. All processing requires a running ambient server.")
-                        }
-                    }
-
-                    Section {
                         NavigationLink {
                             VoiceWakeWordsSettingsView()
                         } label: {
@@ -520,17 +471,6 @@ struct SettingsTab: View {
 
     private var locationMode: OpenClawLocationMode {
         OpenClawLocationMode(rawValue: self.locationEnabledModeRaw) ?? .off
-    }
-
-    private func reconfigureAmbientServer() {
-        let host = self.ambientServerHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !host.isEmpty else { return }
-        let port = self.ambientServerPort > 0 ? self.ambientServerPort : 8200
-        guard let url = URL(string: "ws://\(host):\(port)/ws/ambient") else { return }
-        self.appModel.ambientListening.configure(
-            proactiveExecutor: self.appModel.proactiveExecutor,
-            ambientStore: self.appModel.ambientStore,
-            serverURL: url)
     }
 
     private func appVersion() -> String {
