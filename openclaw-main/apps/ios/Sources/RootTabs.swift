@@ -4,6 +4,7 @@ struct RootTabs: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(VoiceWakeManager.self) private var voiceWake
     @AppStorage(VoiceWakePreferences.enabledKey) private var voiceWakeEnabled: Bool = false
+    @AppStorage("ambient.enabled") private var ambientEnabled: Bool = false
     @State private var selectedTab: Int = 0
     @State private var voiceWakeToastText: String?
     @State private var toastDismissTask: Task<Void, Never>?
@@ -162,6 +163,22 @@ struct RootTabs: View {
                 let suffix = self.appModel.isBackgrounded ? " (background)" : ""
                 return StatusPill.Activity(title: "Voice Wake paused\(suffix)", systemImage: "pause.circle.fill")
             }
+        }
+
+        // Ambient listening status
+        if self.ambientEnabled, self.appModel.ambientListening.isListening {
+            let pendingCount = self.appModel.ambientStore.pendingCount
+            let suffix = pendingCount > 0 ? " (\(pendingCount))" : ""
+            if self.appModel.ambientListening.isPaused {
+                return StatusPill.Activity(
+                    title: "Ambient paused\(suffix)",
+                    systemImage: "pause.circle.fill",
+                    tint: .orange)
+            }
+            return StatusPill.Activity(
+                title: "Ambient listening\(suffix)",
+                systemImage: "waveform.badge.mic",
+                tint: .green)
         }
 
         return nil
