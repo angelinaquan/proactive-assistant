@@ -1,0 +1,175 @@
+# IMPLEMENTATION_PLAN.md — Gap Analysis
+
+Comprehensive comparison of the implemented code against the original product requirements. Each finding is categorized by severity.
+
+---
+
+## 1. Missing Behavior
+
+### 1.1 ~~CRITICAL~~ ✅ RESOLVED — Video Chat now has full AI response loop
+**Requirement**: "AI can speak sub-second responses"  
+**Fix**: Implemented complete conversational loop:
+1. Server: New `POST /chat` endpoint with conversation history, LLM integration, graceful error fallback (`server/chat.py`)
+2. iOS: New `ChatClient` actor for REST calls to `/chat` (`Services/ChatClient.swift`)
+3. iOS: Rewrote `VideoChatView` with `VideoChatEngine` that handles the full loop:
+   - Mic capture → SFSpeechRecognizer → silence detection (1.5s threshold)
+   - Sends finalized transcript to `POST /chat`
+   - Shows "Thinking…" state with avatar animation
+   - Speaks AI response via AVSpeechSynthesizer (system TTS)
+   - Drives `isSpeaking` flag for avatar glow animation
+   - Resumes listening after speech completes
+4. Tests: 13 server tests for chat module (models, history, multi-turn, failure, cleanup)  
+**Files changed**: `server/chat.py`, `server/main.py`, `ios/.../VideoChatView.swift`, `ios/.../ChatClient.swift`
+
+### 1.2 ~~CRITICAL~~ ✅ RESOLVED — `auto_execute` setting wired to ProactiveExecutor
+**Requirement**: Auto-execute toggle in Settings controls whether actions are executed immediately.  
+**Fix**: `ProactiveExecutor.processActionPlan` now checks `isAutoExecuteEnabled` (reads `UserDefaults "ambient.autoExecute"`) in addition to the server's `auto_execute` flag. When the user disables auto-execute, all items are stored as suggestions regardless of server confidence. Added 6 server-side tests verifying the `auto_execute` flag contract.  
+**Files changed**: `ios/AmbientApp/Ambient/ProactiveExecutor.swift`  
+**Tests added**: `server/tests/test_auto_execute_flag.py` (6 tests)
+
+### 1.3 HIGH — No listening indicator on Lock Screen / Control Center
+**Requirement**: "A clear, accessible 'Pause Listening' control is always available (Lock Screen widget, Control Center toggle, in-app button)."  
+**Current state**: In-app pause button exists. No Lock Screen widget, no Control Center toggle, no Live Activity.  
+**Gap**: iOS Lock Screen / Control Center integration is entirely missing.  
+**Files**: None exist yet.
+
+### 1.4 ~~HIGH~~ ✅ RESOLVED — Local notifications on auto-execute
+**Fix**: `ProactiveExecutor.execute()` now sends a local notification via `UNUserNotificationCenter` after each successful auto-execution. Notification shows "✅ Action Created" with the action description. Requests permission if not determined. Includes `actionPlanId` in `userInfo` for deep linking.  
+**Files changed**: `ios/AmbientApp/Ambient/ProactiveExecutor.swift`
+
+### 1.5 MEDIUM — Edit action not implemented in the iOS UI
+**Requirement**: Users can "Edit" an action plan.  
+**Current state**: `AmbientItemRow` and `AmbientItemDetailView` have Keep/Undo/Execute/Discard buttons but no Edit button. The server model supports `FeedbackAction.EDIT` with `edited_params`, but there's no UI to modify the title, deadline, or notes before confirming.  
+**Gap**: No editing flow in the client.  
+**Files**: `ios/AmbientApp/Views/AmbientItemRow.swift`, `ios/AmbientApp/Views/AmbientItemDetailView.swift`
+
+### 1.6 MEDIUM — No transcript history view
+**Requirement**: "Provide a visible log of: What was captured"  
+**Current state**: `PrivacyView` mentions transcripts are deleted within 60s, but there's no way to view the raw transcript log. The server stores `transcript_history` per session but doesn't expose it. `AmbientListeningManager.lastTranscript` only holds the most recent segment.  
+**Gap**: No UI for viewing transcript history.  
+**Files**: `ios/AmbientApp/Views/PrivacyView.swift`
+
+### 1.7 LOW — No data export
+**Requirement**: Privacy section should support "Export data option."  
+**Current state**: `PrivacyView` has delete but no export.  
+**Gap**: Missing export-to-file or share sheet functionality.  
+**Files**: `ios/AmbientApp/Views/PrivacyView.swift`
+
+---
+
+## 2. Weak Tests
+
+### 2.1 ~~No server integration tests~~ ✅ RESOLVED — 15 automated integration tests
+**Fix**: Added `test_server_integration.py` using FastAPI TestClient (in-process, no running server needed). Tests: health endpoint, /items (empty + unknown session), /chat with mocked LLM, /chat/clear, WebSocket connect/disconnect, pause/resume, audio send, feedback, invalid JSON, auth rejection with API key, session lifecycle, memory cleanup limits, min transcript length.  
+**Files added**: `server/tests/test_server_integration.py`
+
+### 2.2 No test for the auth rejection path
+**Current**: API key auth is implemented but untested.  
+**Gap**: No test verifying that an invalid API key results in a 4001 close code.
+
+### 2.3 No test for concurrent sessions
+**Current**: `sessions` dict is global mutable state. No test verifies two simultaneous WebSocket connections don't corrupt each other's data.  
+**Gap**: Missing concurrency test.
+
+### 2.4 No test for extraction with actual OpenAI call (even mocked)
+**Current**: `test_extraction.py` tests `_parse_extraction_response` (the parser) but not `extract_actions` (the full function that calls OpenAI).  
+**Gap**: Should mock `AsyncOpenAI` and test the full extraction flow including error handling, empty transcript, and API timeout.
+
+### 2.5 No test for AmbientSession._handle_transcript → _run_extraction pipeline
+**Current**: Server's main processing pipeline (transcript → buffer → extraction → plan → send) has zero test coverage. Only the individual components are tested.  
+**Gap**: Missing integration-level test for the pipeline.
+
+### 2.6 TranscriptBuffer tests don't cover multiple consecutive flushes
+**Current**: Tests cover single flush and auto-flush, but not the sequence: add segments → flush → add more → flush again.  
+**Gap**: Missing state continuity test.
+
+---
+
+## 3. Performance Risks
+
+### 3.1 Whisper model loaded per session
+**Current**: `AmbientTranscriber.start()` calls `get_model()` which is cached globally, so this is actually OK for single-server deployments. But the model lives in GPU memory (~75MB for tiny.en) and is never unloaded.  
+**Risk**: Memory pressure if the server runs alongside other GPU workloads.
+
+### 3.2 ~~LLM extraction called every 45 seconds~~ ✅ RESOLVED — Min word count gate
+**Fix**: `AmbientSession._run_extraction()` now skips transcripts with fewer than 5 words before calling the LLM. Whisper often produces short fragments from background noise; these are now filtered out with a debug log.  
+**Files changed**: `server/main.py`
+
+### 3.3 ~~ActionPlan objects accumulate in memory~~ ✅ RESOLVED — Capped + periodic cleanup
+**Fix**: `AmbientSession._cleanup_old_data()` caps action plans at 200 and transcript history at 100 entries. Called after every extraction cycle. Oldest entries trimmed first by `detected_at`.  
+**Files changed**: `server/main.py`
+
+### 3.4 RollbackStore on iOS has no size limit
+**Current**: Entries accumulate indefinitely. Old confirmed/undone entries are never cleaned up.  
+**Risk**: File grows unbounded over weeks of use.
+
+### 3.5 PCM resampling is naive
+**Current**: `processAudio` does nearest-neighbor downsampling from device sample rate to 16kHz. This introduces aliasing artifacts that degrade Whisper accuracy.  
+**Risk**: Lower transcription quality than necessary. Should use proper anti-aliased resampling (e.g., linear interpolation at minimum).
+
+---
+
+## 4. Remaining TODOs / Placeholders
+
+### 4.1 `sk-not-configured` fallback API key
+**File**: `server/extraction.py:64`  
+**Issue**: When no API key is set, the OpenAI client is created with `sk-not-configured`. The first extraction call will fail with an auth error, which is caught and logged — but the user gets no UI feedback that the server isn't properly configured.  
+**Suggestion**: Add a startup health check that warns if `OPENAI_API_KEY` is empty.
+
+### 4.2 Server has no graceful shutdown
+**File**: `server/main.py`  
+**Issue**: No `@app.on_event("shutdown")` handler. Active transcription sessions won't be cleaned up if the server is killed.
+
+### 4.3 No rate limiting on WebSocket or REST endpoints
+**File**: `server/main.py`  
+**Issue**: A malicious client can flood the server with audio data or feedback requests.
+
+---
+
+## 5. Architectural Inconsistencies
+
+### 5.1 Dual state tracking: server and client both track execution status
+**Issue**: The server's `ActionPlan.execution_status` and the iOS `AmbientActionItem.executionStatus` track the same state independently. Feedback from the client updates the server, but if the client crashes before sending feedback, the states diverge permanently.  
+**Impact**: No single source of truth for action lifecycle.  
+**Suggestion**: Either make the server authoritative (client always fetches current state) or make the client authoritative (server is stateless after sending the plan).
+
+### 5.2 Sessions are ephemeral — all state lost on disconnect
+**Issue**: When the WebSocket disconnects, `sessions.pop(session_id)` deletes all action plans and transcript history. If the user's phone sleeps and reconnects, all pending actions are gone from the server side.  
+**Impact**: Client must be the sole source of truth (which it currently is, via AmbientStore), but the server's `/items` endpoint is then misleading since it only shows items from active sessions.  
+**Suggestion**: Either persist server-side state to disk, or remove the `/items` REST endpoint (it gives a false impression of persistence).
+
+### 5.3 AmbientListeningManager.wsClient is `let` but publicly accessible
+**File**: `ios/AmbientApp/Ambient/AmbientListeningManager.swift`  
+**Issue**: `let wsClient = AmbientWebSocketClient()` is not private. External code could call `wsClient.connect()` or `wsClient.disconnect()` directly, bypassing the manager's state machine.  
+**Suggestion**: Make it `private let`.
+
+### 5.4 AppModel uses force-unwrapped `proactiveExecutor`
+**File**: `ios/AmbientApp/AppModel.swift`  
+**Issue**: `private(set) var proactiveExecutor: ProactiveExecutor!` — the `!` force-unwrap is necessary because `self` isn't available during property init, but it's a code smell. If anyone accesses `proactiveExecutor` before `init()` completes, it crashes.  
+**Suggestion**: Use a two-phase init or `@ObservationIgnored lazy var` (which was attempted earlier but has its own issues with `@Observable`).
+
+### 5.5 Config is class-level constants, not instance
+**File**: `server/config.py`  
+**Issue**: `AmbientConfig` uses class-level attributes, read once at import time. Environment variable changes after import are not reflected. This is fine for most deployments but prevents runtime config reloading.
+
+---
+
+## 6. Summary of Recommended Implementation Priority
+
+| Priority | Item | Effort |
+|----------|------|--------|
+| ~~P0~~ | ~~Wire video chat to actually generate AI responses (1.1)~~ | ✅ Done |
+| ~~P0~~ | ~~Wire auto-execute toggle to ProactiveExecutor (1.2)~~ | ✅ Done |
+| ~~P1~~ | ~~Add local notifications on auto-execute (1.4)~~ | ✅ Done |
+| ~~P1~~ | ~~Add automated WebSocket integration test (2.1)~~ | ✅ Done |
+| ~~P1~~ | ~~Add minimum transcript length before LLM call (3.2)~~ | ✅ Done |
+| ~~P1~~ | ~~Clean up old action plans from server memory (3.3)~~ | ✅ Done |
+| **P2** | Add Edit UI for action plans (1.5) | Medium |
+| **P2** | Mock-based test for extract_actions (2.4) | Medium |
+| **P2** | Add RollbackStore cleanup of old entries (3.4) | Small |
+| **P2** | Make wsClient private (5.3) | Trivial |
+| **P3** | Lock Screen widget / Control Center toggle (1.3) | Large |
+| **P3** | Transcript history view (1.6) | Medium |
+| **P3** | Data export (1.7) | Small |
+| **P3** | Rate limiting (4.3) | Medium |
+| **P3** | Proper PCM resampling (3.5) | Medium |

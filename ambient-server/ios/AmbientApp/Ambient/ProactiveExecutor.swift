@@ -1,7 +1,14 @@
 import Foundation
 import OSLog
+import UserNotifications
 
 /// Executes action plans proactively and tracks rollback info for undo.
+///
+/// Respects the user's "Auto-Execute Actions" setting: when disabled,
+/// all items are stored as suggestions regardless of server confidence.
+///
+/// Sends a local notification after each auto-executed action so the user
+/// knows something was created even when the app is backgrounded.
 @MainActor
 final class ProactiveExecutor {
     private let logger = Logger(subsystem: "ambient", category: "Executor")
@@ -10,6 +17,14 @@ final class ProactiveExecutor {
     let rollbackStore: RollbackStore
     let ambientStore: AmbientStore
 
+    /// Whether auto-execution is allowed. Reads the user's setting.
+    /// When `false`, all action plans are stored as suggestions.
+    var isAutoExecuteEnabled: Bool {
+        // Mirror the @AppStorage("ambient.autoExecute") default of true
+        if UserDefaults.standard.object(forKey: "ambient.autoExecute") == nil { return true }
+        return UserDefaults.standard.bool(forKey: "ambient.autoExecute")
+    }
+
     init(rollbackStore: RollbackStore, ambientStore: AmbientStore) {
         self.rollbackStore = rollbackStore
         self.ambientStore = ambientStore
@@ -17,7 +32,13 @@ final class ProactiveExecutor {
 
     func processActionPlan(_ item: AmbientActionItem) async {
         self.ambientStore.addItem(item)
-        if item.autoExecute { await self.execute(item) }
+
+        // Only auto-execute if BOTH the server says auto_execute AND the user has the setting enabled
+        if item.autoExecute && self.isAutoExecuteEnabled {
+            await self.execute(item)
+        } else if item.autoExecute && !self.isAutoExecuteEnabled {
+            self.logger.info("Auto-execute disabled by user; stored as suggestion: \(item.actionDescription, privacy: .public)")
+        }
     }
 
     func execute(_ item: AmbientActionItem) async {
@@ -45,6 +66,9 @@ final class ProactiveExecutor {
             self.ambientStore.updateItem(m)
             self.rollbackStore.recordExecution(actionPlanId: item.id, type: item.type, systemIdentifier: sysId, undoWindowSeconds: item.undoWindowSeconds)
             self.logger.info("Executed: \(item.actionDescription, privacy: .public)")
+
+            // Send local notification so user knows even when backgrounded
+            await self.sendExecutionNotification(for: item)
         } catch {
             m.executionStatus = .failed; self.ambientStore.updateItem(m)
             self.logger.error("Failed: \(error.localizedDescription, privacy: .public)")
@@ -84,5 +108,39 @@ final class ProactiveExecutor {
     func autoConfirmExpired() {
         self.rollbackStore.autoConfirmExpired()
         self.ambientStore.autoConfirmExpired()
+    }
+
+    // MARK: - Notifications
+
+    private func sendExecutionNotification(for item: AmbientActionItem) async {
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+
+        if settings.authorizationStatus == .notDetermined {
+            _ = try? await center.requestAuthorization(options: [.alert, .sound])
+        }
+
+        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
+                || settings.authorizationStatus == .notDetermined else {
+            return
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = "✅ Action Created"
+        content.body = item.actionDescription
+        content.sound = .default
+        content.userInfo = ["actionPlanId": item.id]
+
+        let request = UNNotificationRequest(
+            identifier: "ambient-\(item.id)",
+            content: content,
+            trigger: nil) // Deliver immediately
+
+        do {
+            try await center.add(request)
+            self.logger.info("Notification sent for: \(item.actionDescription, privacy: .public)")
+        } catch {
+            self.logger.warning("Notification failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 }

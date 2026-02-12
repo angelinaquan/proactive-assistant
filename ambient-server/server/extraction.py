@@ -40,7 +40,8 @@ dentist this week")
 7. Categorize each item as one of: reminder, calendar_event, follow_up, \
 commitment, note, draft_message
 
-OUTPUT FORMAT: Return a JSON array of extracted items. Each item has:
+OUTPUT FORMAT: Return a JSON object with an "items" key containing an array. \
+Each item has:
 {
   "type": "reminder|calendar_event|follow_up|commitment|note|draft_message",
   "title": "Short action description",
@@ -52,15 +53,15 @@ OUTPUT FORMAT: Return a JSON array of extracted items. Each item has:
   "reasoning": "Brief explanation of why this was extracted"
 }
 
-Return ONLY the JSON array. No other text. If nothing actionable is found, \
-return an empty array: []
+Example: {"items": [...]}
+If nothing actionable is found, return: {"items": []}
 """
 
 
 def _get_client() -> AsyncOpenAI:
     """Create an OpenAI client."""
     return AsyncOpenAI(
-        api_key=config.OPENAI_API_KEY or "sk-placeholder",
+        api_key=config.OPENAI_API_KEY or "sk-not-configured",
         base_url=config.OPENAI_BASE_URL,
     )
 
@@ -82,24 +83,37 @@ async def extract_actions(
     if not transcript.strip():
         return ExtractionResult(items=[], transcript_segment=transcript)
 
-    user_prompt = f"Analyze this conversation transcript for actionable items:\n\n"
+    # Include current date/time so the LLM can resolve relative dates
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    now_str = now.strftime("%A, %B %d, %Y at %I:%M %p UTC")
+
+    user_prompt = f"Current date/time: {now_str}\n\n"
+    user_prompt += "Analyze this conversation transcript for actionable items:\n\n"
     if context:
         user_prompt += f"[Previous context]: {context}\n\n"
     user_prompt += f"[Current segment]: {transcript}"
 
     client = _get_client()
 
+    # Try JSON mode first, fall back to plain text parsing
+    use_json_mode = config.OPENAI_MODEL.startswith("gpt-")
+
     try:
-        response = await client.chat.completions.create(
-            model=config.OPENAI_MODEL,
-            messages=[
+        kwargs: dict = {
+            "model": config.OPENAI_MODEL,
+            "messages": [
                 {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.2,
-            max_tokens=2000,
-            response_format={"type": "json_object"},
-        )
+            "temperature": 0.2,
+            "max_tokens": 2000,
+        }
+        if use_json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        response = await client.chat.completions.create(**kwargs)
 
         content = response.choices[0].message.content or "[]"
         items = _parse_extraction_response(content)

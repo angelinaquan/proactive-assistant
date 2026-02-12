@@ -64,6 +64,7 @@ private struct SettingsView: View {
     @AppStorage("ambient.enabled") private var ambientEnabled: Bool = false
     @AppStorage("ambient.serverHost") private var serverHost: String = ""
     @AppStorage("ambient.serverPort") private var serverPort: Int = 8200
+    @AppStorage("ambient.apiKey") private var apiKey: String = ""
     @AppStorage("ambient.autoExecute") private var autoExecute: Bool = true
 
     var body: some View {
@@ -72,18 +73,21 @@ private struct SettingsView: View {
                 Section("Server") {
                     Toggle("Ambient Listening", isOn: self.$ambientEnabled)
                         .onChange(of: self.ambientEnabled) { _, v in
-                            self.appModel.updateServerConfig(host: self.serverHost, port: self.serverPort)
+                            self.appModel.updateServerConfig(host: self.serverHost, port: self.serverPort, apiKey: self.apiKey)
                             self.appModel.ambientListening.setEnabled(v)
                         }
                     TextField("Server Host", text: self.$serverHost)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .onSubmit { self.appModel.updateServerConfig(host: self.serverHost, port: self.serverPort) }
+                        .onSubmit { self.appModel.updateServerConfig(host: self.serverHost, port: self.serverPort, apiKey: self.apiKey) }
                     HStack {
                         Text("Port"); Spacer()
                         TextField("8200", value: self.$serverPort, format: .number)
                             .multilineTextAlignment(.trailing).frame(width: 80).keyboardType(.numberPad)
-                            .onSubmit { self.appModel.updateServerConfig(host: self.serverHost, port: self.serverPort) }
+                            .onSubmit { self.appModel.updateServerConfig(host: self.serverHost, port: self.serverPort, apiKey: self.apiKey) }
                     }
+                    SecureField("API Key (optional)", text: self.$apiKey)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .onSubmit { self.appModel.updateServerConfig(host: self.serverHost, port: self.serverPort, apiKey: self.apiKey) }
                     Toggle("Auto-Execute Actions", isOn: self.$autoExecute)
                     Text("High-confidence actions are created immediately. Undo within 30 minutes.")
                         .font(.footnote).foregroundStyle(.secondary)

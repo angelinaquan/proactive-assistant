@@ -18,6 +18,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from action_planner import ActionPlanner
+from chat import ChatRequest, ChatResponse, chat as chat_handler, clear_chat_history
 from config import config
 from extraction import extract_actions
 from models import (
@@ -57,14 +58,20 @@ class AmbientSession:
         self.buffer = TranscriptBuffer()
         self.planner = ActionPlanner()
         self.action_plans: dict[str, ActionPlan] = {}
-        self.transcript_history: list[str] = []
+        self.transcript_history: list[str] = []  # capped at MAX_TRANSCRIPT_HISTORY
+        self._max_action_plans = 200
+        self._max_transcript_history = 100
         self.is_paused = False
         self.created_at = datetime.now(timezone.utc)
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._extraction_lock = asyncio.Lock()
         self._context_window: list[str] = []  # Last N segments for context
 
     async def start_transcription(self) -> None:
         """Start the transcription engine."""
+        # Capture the running event loop so the sync callback from the
+        # transcriber thread can safely schedule async work.
+        self._loop = asyncio.get_running_loop()
         self.transcriber = AmbientTranscriber(
             on_transcript=self._on_transcript_sync,
         )
@@ -75,15 +82,18 @@ class AmbientSession:
         if self.transcriber:
             await self.transcriber.stop()
             self.transcriber = None
+        self._loop = None
 
     def _on_transcript_sync(
         self, text: str, is_partial: bool, latency_ms: float
     ) -> None:
-        """Sync callback from transcriber — schedules async work."""
-        asyncio.get_event_loop().call_soon_threadsafe(
-            asyncio.ensure_future,
-            self._handle_transcript(text, is_partial, latency_ms),
-        )
+        """Sync callback from transcriber thread — schedules async work on the event loop."""
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(
+                loop.create_task,
+                self._handle_transcript(text, is_partial, latency_ms),
+            )
 
     async def _handle_transcript(
         self, text: str, is_partial: bool, latency_ms: float
@@ -110,6 +120,18 @@ class AmbientSession:
 
     async def _run_extraction(self, transcript: str) -> None:
         """Run LLM extraction on accumulated transcript."""
+        # Skip short/gibberish transcripts to avoid wasting LLM API calls.
+        # Whisper often produces very short fragments from background noise.
+        MIN_TRANSCRIPT_WORDS = 5
+        word_count = len(transcript.split())
+        if word_count < MIN_TRANSCRIPT_WORDS:
+            logger.debug(
+                "Skipping extraction: transcript too short (%d words): %s",
+                word_count,
+                transcript[:80],
+            )
+            return
+
         async with self._extraction_lock:
             try:
                 # Build context from recent segments
@@ -145,6 +167,9 @@ class AmbientSession:
                         plan.action_description,
                         plan.auto_execute,
                     )
+
+                # Periodic cleanup to prevent memory growth
+                self._cleanup_old_data()
 
             except Exception as e:
                 logger.error("Extraction failed: %s", e)
@@ -187,6 +212,23 @@ class AmbientSession:
             plan.execution_status.value,
         )
 
+    def _cleanup_old_data(self) -> None:
+        """Remove old action plans and transcript entries to prevent memory growth."""
+        # Trim action plans: keep most recent N
+        if len(self.action_plans) > self._max_action_plans:
+            sorted_plans = sorted(
+                self.action_plans.items(),
+                key=lambda kv: kv[1].detected_at,
+            )
+            excess = len(sorted_plans) - self._max_action_plans
+            for plan_id, _ in sorted_plans[:excess]:
+                del self.action_plans[plan_id]
+            logger.info("Cleaned up %d old action plans", excess)
+
+        # Trim transcript history
+        if len(self.transcript_history) > self._max_transcript_history:
+            self.transcript_history = self.transcript_history[-self._max_transcript_history:]
+
     async def flush_and_extract(self) -> None:
         """Force flush the transcript buffer and run extraction."""
         accumulated = self.buffer.flush()
@@ -214,7 +256,18 @@ async def ambient_websocket(websocket: WebSocket):
 
     Client sends PCM audio chunks (binary) or JSON control messages.
     Server sends transcript segments and action plans.
+
+    Authentication: If AMBIENT_API_KEY is set, client must pass it as
+    a query parameter: ws://host:port/ws/ambient?key=YOUR_KEY
     """
+    # Check API key if configured
+    if config.API_KEY:
+        client_key = websocket.query_params.get("key", "")
+        if client_key != config.API_KEY:
+            await websocket.close(code=4001, reason="Invalid API key")
+            logger.warning("Rejected WebSocket connection: invalid API key")
+            return
+
     await websocket.accept()
     session_id = uuid.uuid4().hex
     session = AmbientSession(session_id, websocket)
@@ -293,9 +346,11 @@ def health():
 def list_items(session_id: str | None = None):
     """List all action plans across sessions (or for a specific session)."""
     all_plans = []
-    target_sessions = (
-        [sessions[session_id]] if session_id and session_id in sessions else sessions.values()
-    )
+    if session_id:
+        session = sessions.get(session_id)
+        target_sessions = [session] if session else []
+    else:
+        target_sessions = list(sessions.values())
     for session in target_sessions:
         all_plans.extend(
             plan.model_dump(mode="json") for plan in session.action_plans.values()
@@ -317,6 +372,27 @@ async def item_feedback(item_id: str, feedback: ActionFeedback):
         status_code=404,
         content={"ok": False, "error": f"Action plan {item_id} not found"},
     )
+
+
+# ---------------------------------------------------------------------------
+# Chat endpoints (for video chat AI responses)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat_endpoint(request: ChatRequest):
+    """
+    Send a message and get an AI response. Used by the video chat feature.
+    Maintains conversation history per session_id.
+    """
+    return await chat_handler(request)
+
+
+@app.post("/chat/clear")
+async def chat_clear(session_id: str = "default"):
+    """Clear conversation history for a session."""
+    clear_chat_history(session_id)
+    return {"ok": True, "session_id": session_id}
 
 
 # ---------------------------------------------------------------------------
