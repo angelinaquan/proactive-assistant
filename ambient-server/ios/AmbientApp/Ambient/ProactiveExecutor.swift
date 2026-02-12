@@ -1,10 +1,14 @@
 import Foundation
 import OSLog
+import UserNotifications
 
 /// Executes action plans proactively and tracks rollback info for undo.
 ///
 /// Respects the user's "Auto-Execute Actions" setting: when disabled,
 /// all items are stored as suggestions regardless of server confidence.
+///
+/// Sends a local notification after each auto-executed action so the user
+/// knows something was created even when the app is backgrounded.
 @MainActor
 final class ProactiveExecutor {
     private let logger = Logger(subsystem: "ambient", category: "Executor")
@@ -62,6 +66,9 @@ final class ProactiveExecutor {
             self.ambientStore.updateItem(m)
             self.rollbackStore.recordExecution(actionPlanId: item.id, type: item.type, systemIdentifier: sysId, undoWindowSeconds: item.undoWindowSeconds)
             self.logger.info("Executed: \(item.actionDescription, privacy: .public)")
+
+            // Send local notification so user knows even when backgrounded
+            await self.sendExecutionNotification(for: item)
         } catch {
             m.executionStatus = .failed; self.ambientStore.updateItem(m)
             self.logger.error("Failed: \(error.localizedDescription, privacy: .public)")
@@ -101,5 +108,39 @@ final class ProactiveExecutor {
     func autoConfirmExpired() {
         self.rollbackStore.autoConfirmExpired()
         self.ambientStore.autoConfirmExpired()
+    }
+
+    // MARK: - Notifications
+
+    private func sendExecutionNotification(for item: AmbientActionItem) async {
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+
+        if settings.authorizationStatus == .notDetermined {
+            _ = try? await center.requestAuthorization(options: [.alert, .sound])
+        }
+
+        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
+                || settings.authorizationStatus == .notDetermined else {
+            return
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = "✅ Action Created"
+        content.body = item.actionDescription
+        content.sound = .default
+        content.userInfo = ["actionPlanId": item.id]
+
+        let request = UNNotificationRequest(
+            identifier: "ambient-\(item.id)",
+            content: content,
+            trigger: nil) // Deliver immediately
+
+        do {
+            try await center.add(request)
+            self.logger.info("Notification sent for: \(item.actionDescription, privacy: .public)")
+        } catch {
+            self.logger.warning("Notification failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 }

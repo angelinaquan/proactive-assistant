@@ -33,11 +33,9 @@ Comprehensive comparison of the implemented code against the original product re
 **Gap**: iOS Lock Screen / Control Center integration is entirely missing.  
 **Files**: None exist yet.
 
-### 1.4 HIGH — No notifications when actions are auto-executed
-**Requirement**: "Users open the app to see what the system has inferred or prepared on their behalf."  
-**Current state**: Actions are silently added to the store. If the app is backgrounded, the user has no way to know something was created until they open the app.  
-**Gap**: Should send a local notification like "✅ Created reminder: Send report to Sarah" so the user knows to review.  
-**Files**: `ios/AmbientApp/Ambient/ProactiveExecutor.swift`
+### 1.4 ~~HIGH~~ ✅ RESOLVED — Local notifications on auto-execute
+**Fix**: `ProactiveExecutor.execute()` now sends a local notification via `UNUserNotificationCenter` after each successful auto-execution. Notification shows "✅ Action Created" with the action description. Requests permission if not determined. Includes `actionPlanId` in `userInfo` for deep linking.  
+**Files changed**: `ios/AmbientApp/Ambient/ProactiveExecutor.swift`
 
 ### 1.5 MEDIUM — Edit action not implemented in the iOS UI
 **Requirement**: Users can "Edit" an action plan.  
@@ -61,9 +59,9 @@ Comprehensive comparison of the implemented code against the original product re
 
 ## 2. Weak Tests
 
-### 2.1 No server integration tests (WebSocket lifecycle)
-**Current**: `test_e2e.py` is a manual script, not a pytest test. It requires a running server.  
-**Gap**: No automated test for WebSocket connect → send audio → receive transcript → receive action plan → feedback → disconnect. Should use FastAPI's `TestClient` with `WebSocketTestSession`.
+### 2.1 ~~No server integration tests~~ ✅ RESOLVED — 15 automated integration tests
+**Fix**: Added `test_server_integration.py` using FastAPI TestClient (in-process, no running server needed). Tests: health endpoint, /items (empty + unknown session), /chat with mocked LLM, /chat/clear, WebSocket connect/disconnect, pause/resume, audio send, feedback, invalid JSON, auth rejection with API key, session lifecycle, memory cleanup limits, min transcript length.  
+**Files added**: `server/tests/test_server_integration.py`
 
 ### 2.2 No test for the auth rejection path
 **Current**: API key auth is implemented but untested.  
@@ -93,13 +91,13 @@ Comprehensive comparison of the implemented code against the original product re
 **Current**: `AmbientTranscriber.start()` calls `get_model()` which is cached globally, so this is actually OK for single-server deployments. But the model lives in GPU memory (~75MB for tiny.en) and is never unloaded.  
 **Risk**: Memory pressure if the server runs alongside other GPU workloads.
 
-### 3.2 LLM extraction called every 45 seconds, always
-**Current**: Every 45s of non-silence audio triggers an OpenAI API call. Even if the conversation is just background noise that Whisper transcribes as gibberish.  
-**Risk**: Unnecessary API costs. Should add a minimum transcript quality/length threshold before calling the LLM.
+### 3.2 ~~LLM extraction called every 45 seconds~~ ✅ RESOLVED — Min word count gate
+**Fix**: `AmbientSession._run_extraction()` now skips transcripts with fewer than 5 words before calling the LLM. Whisper often produces short fragments from background noise; these are now filtered out with a debug log.  
+**Files changed**: `server/main.py`
 
-### 3.3 ActionPlan objects accumulate in memory forever
-**Current**: `session.action_plans` dict only grows, never shrinks. On a long-running session (hours), this is a memory leak.  
-**Risk**: Memory growth proportional to session duration.
+### 3.3 ~~ActionPlan objects accumulate in memory~~ ✅ RESOLVED — Capped + periodic cleanup
+**Fix**: `AmbientSession._cleanup_old_data()` caps action plans at 200 and transcript history at 100 entries. Called after every extraction cycle. Oldest entries trimmed first by `detected_at`.  
+**Files changed**: `server/main.py`
 
 ### 3.4 RollbackStore on iOS has no size limit
 **Current**: Entries accumulate indefinitely. Old confirmed/undone entries are never cleaned up.  
@@ -162,10 +160,10 @@ Comprehensive comparison of the implemented code against the original product re
 |----------|------|--------|
 | ~~P0~~ | ~~Wire video chat to actually generate AI responses (1.1)~~ | ✅ Done |
 | ~~P0~~ | ~~Wire auto-execute toggle to ProactiveExecutor (1.2)~~ | ✅ Done |
-| **P1** | Add local notifications on auto-execute (1.4) | Small |
-| **P1** | Add automated WebSocket integration test (2.1) | Medium |
-| **P1** | Add minimum transcript length before LLM call (3.2) | Small |
-| **P1** | Clean up old action plans from server memory (3.3) | Small |
+| ~~P1~~ | ~~Add local notifications on auto-execute (1.4)~~ | ✅ Done |
+| ~~P1~~ | ~~Add automated WebSocket integration test (2.1)~~ | ✅ Done |
+| ~~P1~~ | ~~Add minimum transcript length before LLM call (3.2)~~ | ✅ Done |
+| ~~P1~~ | ~~Clean up old action plans from server memory (3.3)~~ | ✅ Done |
 | **P2** | Add Edit UI for action plans (1.5) | Medium |
 | **P2** | Mock-based test for extract_actions (2.4) | Medium |
 | **P2** | Add RollbackStore cleanup of old entries (3.4) | Small |

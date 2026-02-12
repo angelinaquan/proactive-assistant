@@ -58,7 +58,9 @@ class AmbientSession:
         self.buffer = TranscriptBuffer()
         self.planner = ActionPlanner()
         self.action_plans: dict[str, ActionPlan] = {}
-        self.transcript_history: list[str] = []
+        self.transcript_history: list[str] = []  # capped at MAX_TRANSCRIPT_HISTORY
+        self._max_action_plans = 200
+        self._max_transcript_history = 100
         self.is_paused = False
         self.created_at = datetime.now(timezone.utc)
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -118,6 +120,18 @@ class AmbientSession:
 
     async def _run_extraction(self, transcript: str) -> None:
         """Run LLM extraction on accumulated transcript."""
+        # Skip short/gibberish transcripts to avoid wasting LLM API calls.
+        # Whisper often produces very short fragments from background noise.
+        MIN_TRANSCRIPT_WORDS = 5
+        word_count = len(transcript.split())
+        if word_count < MIN_TRANSCRIPT_WORDS:
+            logger.debug(
+                "Skipping extraction: transcript too short (%d words): %s",
+                word_count,
+                transcript[:80],
+            )
+            return
+
         async with self._extraction_lock:
             try:
                 # Build context from recent segments
@@ -153,6 +167,9 @@ class AmbientSession:
                         plan.action_description,
                         plan.auto_execute,
                     )
+
+                # Periodic cleanup to prevent memory growth
+                self._cleanup_old_data()
 
             except Exception as e:
                 logger.error("Extraction failed: %s", e)
@@ -194,6 +211,23 @@ class AmbientSession:
             feedback.action.value,
             plan.execution_status.value,
         )
+
+    def _cleanup_old_data(self) -> None:
+        """Remove old action plans and transcript entries to prevent memory growth."""
+        # Trim action plans: keep most recent N
+        if len(self.action_plans) > self._max_action_plans:
+            sorted_plans = sorted(
+                self.action_plans.items(),
+                key=lambda kv: kv[1].detected_at,
+            )
+            excess = len(sorted_plans) - self._max_action_plans
+            for plan_id, _ in sorted_plans[:excess]:
+                del self.action_plans[plan_id]
+            logger.info("Cleaned up %d old action plans", excess)
+
+        # Trim transcript history
+        if len(self.transcript_history) > self._max_transcript_history:
+            self.transcript_history = self.transcript_history[-self._max_transcript_history:]
 
     async def flush_and_extract(self) -> None:
         """Force flush the transcript buffer and run extraction."""
