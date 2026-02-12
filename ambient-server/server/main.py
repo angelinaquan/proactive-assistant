@@ -38,11 +38,67 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+import time as _time_module
+from collections import defaultdict
+from contextlib import asynccontextmanager
+
+from fastapi import Request
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse as StarletteJSONResponse
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Server lifecycle: startup and shutdown."""
+    # Startup
+    if not config.OPENAI_API_KEY or config.OPENAI_API_KEY == "sk-not-configured":
+        logger.warning("⚠️  OPENAI_API_KEY not set — extraction and chat will return fallback responses")
+    logger.info("Ambient server started")
+    yield
+    # Shutdown: clean up all active sessions
+    logger.info("Shutting down: cleaning up %d active sessions", len(sessions))
+    for session in list(sessions.values()):
+        await session.stop_transcription()
+    sessions.clear()
+    logger.info("Shutdown complete")
+
+
 app = FastAPI(
     title="Ambient Listening Intelligence Server",
     version="1.0.0",
     description="Real-time ambient audio → transcription → action extraction",
+    lifespan=lifespan,
 )
+
+
+# Simple rate limiter: max 60 requests/minute per IP for REST endpoints
+_rate_limit_store: dict[str, list[float]] = defaultdict(list)
+RATE_LIMIT_MAX = 60
+RATE_LIMIT_WINDOW = 60.0
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Only rate-limit REST, not WebSocket
+        if request.scope.get("type") == "websocket":
+            return await call_next(request)
+        client_ip = request.client.host if request.client else "unknown"
+        now = _time_module.time()
+        # Clean old entries
+        _rate_limit_store[client_ip] = [
+            t for t in _rate_limit_store[client_ip] if t > now - RATE_LIMIT_WINDOW
+        ]
+        if len(_rate_limit_store[client_ip]) >= RATE_LIMIT_MAX:
+            return StarletteJSONResponse(
+                status_code=429,
+                content={"error": "Rate limit exceeded. Max 60 requests/minute."},
+            )
+        _rate_limit_store[client_ip].append(now)
+        return await call_next(request)
+
+
+app.add_middleware(RateLimitMiddleware)
 
 # Global state: action plans indexed by session then by plan ID
 sessions: dict[str, "AmbientSession"] = {}
@@ -58,7 +114,7 @@ class AmbientSession:
         self.buffer = TranscriptBuffer()
         self.planner = ActionPlanner()
         self.action_plans: dict[str, ActionPlan] = {}
-        self.transcript_history: list[str] = []  # capped at MAX_TRANSCRIPT_HISTORY
+        self.transcript_history: list[tuple[float, str]] = []  # (timestamp, text)
         self._max_action_plans = 200
         self._max_transcript_history = 100
         self.is_paused = False
@@ -145,8 +201,9 @@ class AmbientSession:
                 if len(self._context_window) > 5:
                     self._context_window.pop(0)
 
-                # Store transcript
-                self.transcript_history.append(transcript)
+                # Store transcript with timestamp
+                import time as _time
+                self.transcript_history.append((_time.time(), transcript))
 
                 if not result.items:
                     return
@@ -225,7 +282,13 @@ class AmbientSession:
                 del self.action_plans[plan_id]
             logger.info("Cleaned up %d old action plans", excess)
 
-        # Trim transcript history
+        # Auto-delete transcripts older than 60 seconds (per spec)
+        import time as _time
+        cutoff = _time.time() - 60
+        self.transcript_history = [
+            (ts, text) for ts, text in self.transcript_history if ts > cutoff
+        ]
+        # Also cap at max
         if len(self.transcript_history) > self._max_transcript_history:
             self.transcript_history = self.transcript_history[-self._max_transcript_history:]
 
@@ -334,11 +397,13 @@ async def ambient_websocket(websocket: WebSocket):
 @app.get("/health")
 def health():
     """Health check endpoint."""
+    api_key_set = bool(config.OPENAI_API_KEY and config.OPENAI_API_KEY != "sk-not-configured")
     return {
         "status": "ok",
         "service": "ambient-intelligence",
         "version": "1.0.0",
         "active_sessions": len(sessions),
+        "openai_configured": api_key_set,
     }
 
 
@@ -372,6 +437,25 @@ async def item_feedback(item_id: str, feedback: ActionFeedback):
         status_code=404,
         content={"ok": False, "error": f"Action plan {item_id} not found"},
     )
+
+
+# ---------------------------------------------------------------------------
+# Transcript history endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.get("/transcripts")
+def get_transcripts(session_id: str | None = None, limit: int = 50):
+    """Get transcript history for a session (or all sessions)."""
+    all_transcripts: list[str] = []
+    if session_id:
+        session = sessions.get(session_id)
+        target_sessions = [session] if session else []
+    else:
+        target_sessions = list(sessions.values())
+    for session in target_sessions:
+        all_transcripts.extend(text for _, text in session.transcript_history[-limit:])
+    return {"transcripts": all_transcripts[-limit:], "count": len(all_transcripts)}
 
 
 # ---------------------------------------------------------------------------

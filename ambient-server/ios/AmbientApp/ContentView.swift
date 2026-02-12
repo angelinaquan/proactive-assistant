@@ -106,6 +106,7 @@ private struct SettingsView: View {
                     NavigationLink {
                         PrivacyView(
                             itemCount: self.appModel.ambientStore.items.count,
+                            items: self.appModel.ambientStore.items,
                             onDeleteToday: { self.appModel.ambientStore.deleteAllFromToday() },
                             onDeleteAll: { self.appModel.ambientStore.deleteAll() })
                     } label: { Label("Privacy & Data", systemImage: "shield.lefthalf.filled") }
