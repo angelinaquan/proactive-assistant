@@ -12,11 +12,11 @@ Comprehensive comparison of the implemented code against the original product re
 **Gap**: The entire response loop is missing: user speech → send to server → LLM generates reply → TTS audio → play back + animate avatar.  
 **Files**: `ios/AmbientApp/Views/VideoChatView.swift`
 
-### 1.2 CRITICAL — `auto_execute` setting in iOS is not wired to the server
+### 1.2 ~~CRITICAL~~ ✅ RESOLVED — `auto_execute` setting wired to ProactiveExecutor
 **Requirement**: Auto-execute toggle in Settings controls whether actions are executed immediately.  
-**Current state**: `@AppStorage("ambient.autoExecute")` exists in SettingsView but is never read by `ProactiveExecutor` or sent to the server. The server always sets `auto_execute` based on confidence scoring; the client-side toggle is decorative.  
-**Gap**: When the user disables auto-execute, all items should be treated as suggestions regardless of server confidence.  
-**Files**: `ios/AmbientApp/ContentView.swift`, `ios/AmbientApp/Ambient/ProactiveExecutor.swift`
+**Fix**: `ProactiveExecutor.processActionPlan` now checks `isAutoExecuteEnabled` (reads `UserDefaults "ambient.autoExecute"`) in addition to the server's `auto_execute` flag. When the user disables auto-execute, all items are stored as suggestions regardless of server confidence. Added 6 server-side tests verifying the `auto_execute` flag contract.  
+**Files changed**: `ios/AmbientApp/Ambient/ProactiveExecutor.swift`  
+**Tests added**: `server/tests/test_auto_execute_flag.py` (6 tests)
 
 ### 1.3 HIGH — No listening indicator on Lock Screen / Control Center
 **Requirement**: "A clear, accessible 'Pause Listening' control is always available (Lock Screen widget, Control Center toggle, in-app button)."  
@@ -152,7 +152,7 @@ Comprehensive comparison of the implemented code against the original product re
 | Priority | Item | Effort |
 |----------|------|--------|
 | **P0** | Wire video chat to actually generate AI responses (1.1) | Large |
-| **P0** | Wire auto-execute toggle to ProactiveExecutor (1.2) | Small |
+| ~~P0~~ | ~~Wire auto-execute toggle to ProactiveExecutor (1.2)~~ | ✅ Done |
 | **P1** | Add local notifications on auto-execute (1.4) | Small |
 | **P1** | Add automated WebSocket integration test (2.1) | Medium |
 | **P1** | Add minimum transcript length before LLM call (3.2) | Small |

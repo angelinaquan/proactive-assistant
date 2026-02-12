@@ -2,6 +2,9 @@ import Foundation
 import OSLog
 
 /// Executes action plans proactively and tracks rollback info for undo.
+///
+/// Respects the user's "Auto-Execute Actions" setting: when disabled,
+/// all items are stored as suggestions regardless of server confidence.
 @MainActor
 final class ProactiveExecutor {
     private let logger = Logger(subsystem: "ambient", category: "Executor")
@@ -10,6 +13,14 @@ final class ProactiveExecutor {
     let rollbackStore: RollbackStore
     let ambientStore: AmbientStore
 
+    /// Whether auto-execution is allowed. Reads the user's setting.
+    /// When `false`, all action plans are stored as suggestions.
+    var isAutoExecuteEnabled: Bool {
+        // Mirror the @AppStorage("ambient.autoExecute") default of true
+        if UserDefaults.standard.object(forKey: "ambient.autoExecute") == nil { return true }
+        return UserDefaults.standard.bool(forKey: "ambient.autoExecute")
+    }
+
     init(rollbackStore: RollbackStore, ambientStore: AmbientStore) {
         self.rollbackStore = rollbackStore
         self.ambientStore = ambientStore
@@ -17,7 +28,13 @@ final class ProactiveExecutor {
 
     func processActionPlan(_ item: AmbientActionItem) async {
         self.ambientStore.addItem(item)
-        if item.autoExecute { await self.execute(item) }
+
+        // Only auto-execute if BOTH the server says auto_execute AND the user has the setting enabled
+        if item.autoExecute && self.isAutoExecuteEnabled {
+            await self.execute(item)
+        } else if item.autoExecute && !self.isAutoExecuteEnabled {
+            self.logger.info("Auto-execute disabled by user; stored as suggestion: \(item.actionDescription, privacy: .public)")
+        }
     }
 
     func execute(_ item: AmbientActionItem) async {
