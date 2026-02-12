@@ -39,7 +39,10 @@ struct ContentView: View {
                     onExecute: { id in Task {
                         if let item = self.appModel.ambientStore.item(byId: id) { await self.appModel.proactiveExecutor.execute(item) }
                     }},
-                    onDiscard: { self.appModel.proactiveExecutor.discard(actionPlanId: $0) })
+                    onDiscard: { self.appModel.proactiveExecutor.discard(actionPlanId: $0) },
+                    onEdit: { id, title, deadline, notes in
+                        self.appModel.proactiveExecutor.edit(actionPlanId: id, title: title, deadline: deadline, notes: notes)
+                    })
             }
             .navigationTitle("Ambient")
             .toolbar {

@@ -100,6 +100,28 @@ final class ProactiveExecutor {
         }
     }
 
+    func edit(actionPlanId: String, title: String, deadline: String, notes: String) {
+        guard var item = self.ambientStore.item(byId: actionPlanId) else { return }
+        var params = item.actionParams
+        if !title.isEmpty { params["title"] = .string(title) }
+        if !deadline.isEmpty { params["due_iso"] = .string(deadline) }
+        if !notes.isEmpty { params["notes"] = .string(notes) }
+        // Rebuild description
+        let newDesc = "Edited: \"\(title.isEmpty ? item.actionDescription : title)\""
+        item = AmbientActionItem(
+            id: item.id, type: item.type, confidence: item.confidence,
+            confidenceLevel: item.confidenceLevel, autoExecute: item.autoExecute,
+            sourceTranscript: item.sourceTranscript, contextWindow: item.contextWindow,
+            actionDescription: newDesc, actionParams: params,
+            executionStatus: item.executionStatus, executedAt: item.executedAt,
+            executionResult: item.executionResult, detectedAt: item.detectedAt,
+            confirmedAt: item.confirmedAt, undoneAt: item.undoneAt,
+            people: item.people, deadline: deadline.isEmpty ? item.deadline : deadline,
+            undoWindowSeconds: item.undoWindowSeconds)
+        self.ambientStore.updateItem(item)
+        self.logger.info("Edited: \(actionPlanId, privacy: .public) → \(newDesc, privacy: .public)")
+    }
+
     func discard(actionPlanId: String) {
         self.ambientStore.removeItem(id: actionPlanId)
         self.rollbackStore.removeEntry(actionPlanId: actionPlanId)
@@ -107,6 +129,7 @@ final class ProactiveExecutor {
 
     func autoConfirmExpired() {
         self.rollbackStore.autoConfirmExpired()
+        self.rollbackStore.cleanupOldEntries()
         self.ambientStore.autoConfirmExpired()
     }
 

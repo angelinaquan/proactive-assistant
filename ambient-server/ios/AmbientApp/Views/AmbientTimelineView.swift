@@ -7,6 +7,7 @@ struct AmbientTimelineView: View {
     let onUndo: (String) -> Void
     let onExecute: (String) -> Void
     let onDiscard: (String) -> Void
+    var onEdit: ((String, String, String, String) -> Void)? = nil // (id, title, deadline, notes)
 
     var body: some View {
         if self.items.isEmpty { self.emptyState }
@@ -34,7 +35,8 @@ struct AmbientTimelineView: View {
     @ViewBuilder private func row(_ item: AmbientActionItem) -> some View {
         NavigationLink {
             AmbientItemDetailView(item: item, onKeep: { self.onKeep(item.id) }, onUndo: { self.onUndo(item.id) },
-                                  onExecute: { self.onExecute(item.id) }, onDiscard: { self.onDiscard(item.id) })
+                                  onExecute: { self.onExecute(item.id) }, onDiscard: { self.onDiscard(item.id) },
+                                  onEdit: self.onEdit.map { editFn in { title, deadline, notes in editFn(item.id, title, deadline, notes) } })
         } label: {
             AmbientItemRow(item: item, onKeep: { self.onKeep(item.id) }, onUndo: { self.onUndo(item.id) },
                            onExecute: { self.onExecute(item.id) }, onDiscard: { self.onDiscard(item.id) })

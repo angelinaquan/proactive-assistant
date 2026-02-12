@@ -44,6 +44,16 @@ final class RollbackStore {
     func removeEntry(actionPlanId: String) { self.entries.removeAll { $0.actionPlanId == actionPlanId }; self.save() }
     func removeAll() { self.entries.removeAll(); self.save() }
 
+    /// Remove old confirmed/undone entries older than the given interval (default: 7 days).
+    func cleanupOldEntries(olderThan interval: TimeInterval = 7 * 24 * 3600) {
+        let cutoff = Date().addingTimeInterval(-interval)
+        let before = self.entries.count
+        self.entries.removeAll { entry in
+            (entry.status == .confirmed || entry.status == .undone) && entry.executedAt < cutoff
+        }
+        if self.entries.count < before { self.save() }
+    }
+
     private func load() {
         guard FileManager.default.fileExists(atPath: self.storeURL.path) else { return }
         do {

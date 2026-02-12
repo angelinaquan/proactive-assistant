@@ -95,3 +95,28 @@ def test_buffer_empty_segments_not_returned():
     buf.add_segment("   ", is_partial=False)
     result = buf.flush()
     assert result is None
+
+
+def test_buffer_consecutive_flushes():
+    """Buffer should work correctly across multiple flush cycles."""
+    buf = TranscriptBuffer(buffer_seconds=60)
+
+    # First cycle
+    buf.add_segment("first batch segment one", is_partial=False)
+    buf.add_segment("first batch segment two", is_partial=False)
+    result1 = buf.flush()
+    assert result1 is not None
+    assert "first batch segment one" in result1
+    assert "first batch segment two" in result1
+    assert buf.segment_count == 0
+
+    # Second cycle — buffer state should be clean
+    buf.add_segment("second batch only", is_partial=False)
+    result2 = buf.flush()
+    assert result2 is not None
+    assert result2 == "second batch only"
+    assert "first" not in result2  # No bleed from first cycle
+
+    # Third cycle — empty flush
+    result3 = buf.flush()
+    assert result3 is None

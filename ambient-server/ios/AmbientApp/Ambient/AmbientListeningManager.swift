@@ -19,7 +19,7 @@ final class AmbientListeningManager: NSObject {
     private let logger = Logger(subsystem: "ambient", category: "Listening")
     private let audioEngine = AVAudioEngine()
     private var inputTapInstalled = false
-    let wsClient = AmbientWebSocketClient()
+    private let wsClient = AmbientWebSocketClient()
     var proactiveExecutor: ProactiveExecutor?
     var ambientStore: AmbientStore?
     private var autoConfirmTask: Task<Void, Never>?
