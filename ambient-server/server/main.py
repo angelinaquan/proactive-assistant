@@ -18,6 +18,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from action_planner import ActionPlanner
+from chat import ChatRequest, ChatResponse, chat as chat_handler, clear_chat_history
 from config import config
 from extraction import extract_actions
 from models import (
@@ -337,6 +338,27 @@ async def item_feedback(item_id: str, feedback: ActionFeedback):
         status_code=404,
         content={"ok": False, "error": f"Action plan {item_id} not found"},
     )
+
+
+# ---------------------------------------------------------------------------
+# Chat endpoints (for video chat AI responses)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat_endpoint(request: ChatRequest):
+    """
+    Send a message and get an AI response. Used by the video chat feature.
+    Maintains conversation history per session_id.
+    """
+    return await chat_handler(request)
+
+
+@app.post("/chat/clear")
+async def chat_clear(session_id: str = "default"):
+    """Clear conversation history for a session."""
+    clear_chat_history(session_id)
+    return {"ok": True, "session_id": session_id}
 
 
 # ---------------------------------------------------------------------------
