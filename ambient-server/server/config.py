@@ -13,6 +13,10 @@ class AmbientConfig:
     HOST: str = os.getenv("AMBIENT_HOST", "0.0.0.0")
     PORT: int = int(os.getenv("AMBIENT_PORT", "8200"))
 
+    # Authentication (set to require clients to send this key)
+    # Empty string = no auth required (development only)
+    API_KEY: str = os.getenv("AMBIENT_API_KEY", "")
+
     # Whisper STT
     WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "tiny.en.pt")
     WHISPER_LANGUAGE: str = os.getenv("WHISPER_LANGUAGE", "en")

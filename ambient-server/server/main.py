@@ -60,11 +60,15 @@ class AmbientSession:
         self.transcript_history: list[str] = []
         self.is_paused = False
         self.created_at = datetime.now(timezone.utc)
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._extraction_lock = asyncio.Lock()
         self._context_window: list[str] = []  # Last N segments for context
 
     async def start_transcription(self) -> None:
         """Start the transcription engine."""
+        # Capture the running event loop so the sync callback from the
+        # transcriber thread can safely schedule async work.
+        self._loop = asyncio.get_running_loop()
         self.transcriber = AmbientTranscriber(
             on_transcript=self._on_transcript_sync,
         )
@@ -75,15 +79,18 @@ class AmbientSession:
         if self.transcriber:
             await self.transcriber.stop()
             self.transcriber = None
+        self._loop = None
 
     def _on_transcript_sync(
         self, text: str, is_partial: bool, latency_ms: float
     ) -> None:
-        """Sync callback from transcriber — schedules async work."""
-        asyncio.get_event_loop().call_soon_threadsafe(
-            asyncio.ensure_future,
-            self._handle_transcript(text, is_partial, latency_ms),
-        )
+        """Sync callback from transcriber thread — schedules async work on the event loop."""
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(
+                loop.create_task,
+                self._handle_transcript(text, is_partial, latency_ms),
+            )
 
     async def _handle_transcript(
         self, text: str, is_partial: bool, latency_ms: float
@@ -214,7 +221,18 @@ async def ambient_websocket(websocket: WebSocket):
 
     Client sends PCM audio chunks (binary) or JSON control messages.
     Server sends transcript segments and action plans.
+
+    Authentication: If AMBIENT_API_KEY is set, client must pass it as
+    a query parameter: ws://host:port/ws/ambient?key=YOUR_KEY
     """
+    # Check API key if configured
+    if config.API_KEY:
+        client_key = websocket.query_params.get("key", "")
+        if client_key != config.API_KEY:
+            await websocket.close(code=4001, reason="Invalid API key")
+            logger.warning("Rejected WebSocket connection: invalid API key")
+            return
+
     await websocket.accept()
     session_id = uuid.uuid4().hex
     session = AmbientSession(session_id, websocket)

@@ -22,7 +22,8 @@ final class AppModel {
         // Load saved config
         let host = UserDefaults.standard.string(forKey: "ambient.serverHost") ?? ""
         let port = UserDefaults.standard.integer(forKey: "ambient.serverPort")
-        let serverURL = Self.buildServerURL(host: host, port: port)
+        let apiKey = UserDefaults.standard.string(forKey: "ambient.apiKey") ?? ""
+        let serverURL = Self.buildServerURL(host: host, port: port, apiKey: apiKey)
 
         self.ambientListening.configure(
             executor: self.proactiveExecutor,
@@ -34,18 +35,23 @@ final class AppModel {
         }
     }
 
-    func updateServerConfig(host: String, port: Int) {
-        let url = Self.buildServerURL(host: host, port: port)
+    func updateServerConfig(host: String, port: Int, apiKey: String = "") {
+        let key = apiKey.isEmpty
+            ? (UserDefaults.standard.string(forKey: "ambient.apiKey") ?? "")
+            : apiKey
+        let url = Self.buildServerURL(host: host, port: port, apiKey: key)
         self.ambientListening.configure(
             executor: self.proactiveExecutor,
             store: self.ambientStore,
             serverURL: url)
     }
 
-    private static func buildServerURL(host: String, port: Int) -> URL? {
+    private static func buildServerURL(host: String, port: Int, apiKey: String = "") -> URL? {
         let h = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !h.isEmpty else { return nil }
         let p = port > 0 ? port : 8200
-        return URL(string: "ws://\(h):\(p)/ws/ambient")
+        let k = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = k.isEmpty ? "" : "?key=\(k)"
+        return URL(string: "ws://\(h):\(p)/ws/ambient\(query)")
     }
 }
