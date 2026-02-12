@@ -205,8 +205,9 @@ def test_session_cleanup_limits():
         plan = ActionPlan(type=ActionType.REMINDER, action_description=f"Plan {i}")
         session.action_plans[plan.id] = plan
 
-    # Add too many transcripts
-    session.transcript_history = [f"transcript {i}" for i in range(10)]
+    # Add too many transcripts (tuples of (timestamp, text))
+    import time
+    session.transcript_history = [(time.time(), f"transcript {i}") for i in range(10)]
 
     session._cleanup_old_data()
 

@@ -7,6 +7,8 @@ struct AmbientItemDetailView: View {
     let onUndo: () -> Void
     let onExecute: () -> Void
     let onDiscard: () -> Void
+    var onEdit: ((String, String, String) -> Void)? = nil
+    @State private var showEditSheet = false
 
     var body: some View {
         ScrollView {
@@ -61,6 +63,11 @@ struct AmbientItemDetailView: View {
                 self.actionsSection
             }.padding()
         }.navigationTitle("Action Detail").navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: self.$showEditSheet) {
+                AmbientEditSheet(item: self.item) { title, deadline, notes in
+                    self.onEdit?(title, deadline, notes)
+                }
+            }
     }
 
     private var statusColor: Color {
@@ -80,11 +87,17 @@ struct AmbientItemDetailView: View {
         case .executed:
             VStack(spacing: 12) {
                 Button { self.onKeep() } label: { Label("Keep", systemImage: "checkmark.circle.fill").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent).tint(.green)
+                if self.onEdit != nil {
+                    Button { self.showEditSheet = true } label: { Label("Edit", systemImage: "pencil.circle.fill").frame(maxWidth: .infinity) }.buttonStyle(.bordered).tint(.blue)
+                }
                 if self.item.canUndo { Button(role: .destructive) { self.onUndo() } label: { Label("Undo", systemImage: "arrow.uturn.backward.circle.fill").frame(maxWidth: .infinity) }.buttonStyle(.bordered) }
             }.padding(.top, 8)
         case .pending:
             VStack(spacing: 12) {
                 Button { self.onExecute() } label: { Label("Create", systemImage: "plus.circle.fill").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent)
+                if self.onEdit != nil {
+                    Button { self.showEditSheet = true } label: { Label("Edit & Create", systemImage: "pencil.circle.fill").frame(maxWidth: .infinity) }.buttonStyle(.bordered).tint(.blue)
+                }
                 Button(role: .destructive) { self.onDiscard() } label: { Label("Discard", systemImage: "xmark.circle").frame(maxWidth: .infinity) }.buttonStyle(.bordered)
             }.padding(.top, 8)
         default: EmptyView()

@@ -19,7 +19,7 @@ final class AmbientListeningManager: NSObject {
     private let logger = Logger(subsystem: "ambient", category: "Listening")
     private let audioEngine = AVAudioEngine()
     private var inputTapInstalled = false
-    let wsClient = AmbientWebSocketClient()
+    private let wsClient = AmbientWebSocketClient()
     var proactiveExecutor: ProactiveExecutor?
     var ambientStore: AmbientStore?
     private var autoConfirmTask: Task<Void, Never>?
@@ -134,12 +134,17 @@ final class AmbientListeningManager: NSObject {
         guard shouldSend else { return }
         let sr = buffer.format.sampleRate; let ratio = sr / 16000.0
         let outFrames = Int(Double(n) / ratio)
+        // Linear interpolation resampling (avoids aliasing from nearest-neighbor)
         var pcm = Data(count: outFrames * 2)
         pcm.withUnsafeMutableBytes { ptr in
             let p = ptr.bindMemory(to: Int16.self)
             for i in 0..<outFrames {
-                let si = min(Int(Double(i) * ratio), n - 1)
-                p[i] = Int16(max(-1, min(1, data[si])) * 32767)
+                let srcPos = Double(i) * ratio
+                let idx0 = min(Int(srcPos), n - 1)
+                let idx1 = min(idx0 + 1, n - 1)
+                let frac = Float(srcPos - Double(idx0))
+                let sample = data[idx0] * (1.0 - frac) + data[idx1] * frac
+                p[i] = Int16(max(-1, min(1, sample)) * 32767)
             }
         }
         send(pcm)
