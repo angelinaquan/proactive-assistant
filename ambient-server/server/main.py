@@ -311,9 +311,11 @@ def health():
 def list_items(session_id: str | None = None):
     """List all action plans across sessions (or for a specific session)."""
     all_plans = []
-    target_sessions = (
-        [sessions[session_id]] if session_id and session_id in sessions else sessions.values()
-    )
+    if session_id:
+        session = sessions.get(session_id)
+        target_sessions = [session] if session else []
+    else:
+        target_sessions = list(sessions.values())
     for session in target_sessions:
         all_plans.extend(
             plan.model_dump(mode="json") for plan in session.action_plans.values()

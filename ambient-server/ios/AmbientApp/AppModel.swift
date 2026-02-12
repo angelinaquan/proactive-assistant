@@ -50,8 +50,15 @@ final class AppModel {
         let h = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !h.isEmpty else { return nil }
         let p = port > 0 ? port : 8200
+        var components = URLComponents()
+        components.scheme = "ws"
+        components.host = h
+        components.port = p
+        components.path = "/ws/ambient"
         let k = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let query = k.isEmpty ? "" : "?key=\(k)"
-        return URL(string: "ws://\(h):\(p)/ws/ambient\(query)")
+        if !k.isEmpty {
+            components.queryItems = [URLQueryItem(name: "key", value: k)]
+        }
+        return components.url
     }
 }

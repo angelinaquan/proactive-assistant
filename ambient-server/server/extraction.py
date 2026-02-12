@@ -40,7 +40,8 @@ dentist this week")
 7. Categorize each item as one of: reminder, calendar_event, follow_up, \
 commitment, note, draft_message
 
-OUTPUT FORMAT: Return a JSON array of extracted items. Each item has:
+OUTPUT FORMAT: Return a JSON object with an "items" key containing an array. \
+Each item has:
 {
   "type": "reminder|calendar_event|follow_up|commitment|note|draft_message",
   "title": "Short action description",
@@ -52,15 +53,15 @@ OUTPUT FORMAT: Return a JSON array of extracted items. Each item has:
   "reasoning": "Brief explanation of why this was extracted"
 }
 
-Return ONLY the JSON array. No other text. If nothing actionable is found, \
-return an empty array: []
+Example: {"items": [...]}
+If nothing actionable is found, return: {"items": []}
 """
 
 
 def _get_client() -> AsyncOpenAI:
     """Create an OpenAI client."""
     return AsyncOpenAI(
-        api_key=config.OPENAI_API_KEY or "sk-placeholder",
+        api_key=config.OPENAI_API_KEY or "sk-not-configured",
         base_url=config.OPENAI_BASE_URL,
     )
 
