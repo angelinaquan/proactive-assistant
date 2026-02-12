@@ -6,11 +6,20 @@ Comprehensive comparison of the implemented code against the original product re
 
 ## 1. Missing Behavior
 
-### 1.1 CRITICAL — Video Chat has no AI responses
+### 1.1 ~~CRITICAL~~ ✅ RESOLVED — Video Chat now has full AI response loop
 **Requirement**: "AI can speak sub-second responses"  
-**Current state**: `VideoChatVoiceEngine` captures mic audio and runs on-device speech recognition, but the recognized text is never sent anywhere. There is no connection to the ambient server, no LLM call, and no text-to-speech playback. The AI avatar never "speaks." The `isSpeaking` parameter is hardcoded to `false` in the view.  
-**Gap**: The entire response loop is missing: user speech → send to server → LLM generates reply → TTS audio → play back + animate avatar.  
-**Files**: `ios/AmbientApp/Views/VideoChatView.swift`
+**Fix**: Implemented complete conversational loop:
+1. Server: New `POST /chat` endpoint with conversation history, LLM integration, graceful error fallback (`server/chat.py`)
+2. iOS: New `ChatClient` actor for REST calls to `/chat` (`Services/ChatClient.swift`)
+3. iOS: Rewrote `VideoChatView` with `VideoChatEngine` that handles the full loop:
+   - Mic capture → SFSpeechRecognizer → silence detection (1.5s threshold)
+   - Sends finalized transcript to `POST /chat`
+   - Shows "Thinking…" state with avatar animation
+   - Speaks AI response via AVSpeechSynthesizer (system TTS)
+   - Drives `isSpeaking` flag for avatar glow animation
+   - Resumes listening after speech completes
+4. Tests: 13 server tests for chat module (models, history, multi-turn, failure, cleanup)  
+**Files changed**: `server/chat.py`, `server/main.py`, `ios/.../VideoChatView.swift`, `ios/.../ChatClient.swift`
 
 ### 1.2 ~~CRITICAL~~ ✅ RESOLVED — `auto_execute` setting wired to ProactiveExecutor
 **Requirement**: Auto-execute toggle in Settings controls whether actions are executed immediately.  
@@ -151,7 +160,7 @@ Comprehensive comparison of the implemented code against the original product re
 
 | Priority | Item | Effort |
 |----------|------|--------|
-| **P0** | Wire video chat to actually generate AI responses (1.1) | Large |
+| ~~P0~~ | ~~Wire video chat to actually generate AI responses (1.1)~~ | ✅ Done |
 | ~~P0~~ | ~~Wire auto-execute toggle to ProactiveExecutor (1.2)~~ | ✅ Done |
 | **P1** | Add local notifications on auto-execute (1.4) | Small |
 | **P1** | Add automated WebSocket integration test (2.1) | Medium |
