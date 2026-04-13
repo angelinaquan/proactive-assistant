@@ -1,0 +1,37 @@
+services:
+  ambient-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${AMBIENT_PORT:-8200}:${AMBIENT_PORT:-8200}"
+    env_file:
+      - .env
+    environment:
+      # Server
+      - AMBIENT_HOST=${AMBIENT_HOST:-0.0.0.0}
+      - AMBIENT_PORT=${AMBIENT_PORT:-8200}
+      # Authentication
+      - AMBIENT_API_KEY=${AMBIENT_API_KEY:-}
+      # Whisper STT
+      - WHISPER_MODEL=${WHISPER_MODEL:-tiny.en.pt}
+      - WHISPER_LANGUAGE=${WHISPER_LANGUAGE:-en}
+      # OpenAI / LLM
+      - OPENAI_API_KEY=${OPENAI_API_KEY:?OPENAI_API_KEY is required}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      # Confidence thresholds
+      - AUTO_EXECUTE_THRESHOLD=${AUTO_EXECUTE_THRESHOLD:-0.8}
+      - SUGGESTION_THRESHOLD=${SUGGESTION_THRESHOLD:-0.5}
+      # Transcript / extraction tuning
+      - TRANSCRIPT_BUFFER_SECONDS=${TRANSCRIPT_BUFFER_SECONDS:-45}
+      - DEDUP_WINDOW_SECONDS=${DEDUP_WINDOW_SECONDS:-300}
+      # Undo window
+      - UNDO_WINDOW_SECONDS=${UNDO_WINDOW_SECONDS:-1800}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${AMBIENT_PORT:-8200}/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

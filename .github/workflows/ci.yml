@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ambient-server
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: ambient-server/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create .env for tests
+        run: |
+          cp .env.example .env
+
+      - name: Run unit tests
+        env:
+          # Server
+          AMBIENT_HOST: "0.0.0.0"
+          AMBIENT_PORT: "8200"
+          AMBIENT_API_KEY: ""
+          # Whisper
+          WHISPER_MODEL: "tiny.en.pt"
+          WHISPER_LANGUAGE: "en"
+          # OpenAI — use a dummy key for tests (calls are mocked)
+          OPENAI_API_KEY: "sk-test-ci-dummy-key"
+          OPENAI_MODEL: "gpt-4o-mini"
+          OPENAI_BASE_URL: "https://api.openai.com/v1"
+          # Thresholds
+          AUTO_EXECUTE_THRESHOLD: "0.8"
+          SUGGESTION_THRESHOLD: "0.5"
+          # Transcript / extraction
+          TRANSCRIPT_BUFFER_SECONDS: "45"
+          DEDUP_WINDOW_SECONDS: "300"
+          # Undo
+          UNDO_WINDOW_SECONDS: "1800"
+        run: |
+          cd server && python3 -m pytest tests/ -v
+
+  lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ambient-server
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run ruff check
+        run: ruff check server/
+
+  docker-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ambient-server
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify Dockerfile env vars match .env.example
+        run: |
+          # Extract env var names from .env.example (ignore comments and blank lines)
+          env_example_vars=$(grep -E '^[A-Z_]+=' .env.example | cut -d= -f1 | sort)
+          # Extract ENV declarations from Dockerfile
+          dockerfile_vars=$(grep -E '^ENV [A-Z_]+' Dockerfile | awk '{print $2}' | cut -d= -f1 | sort)
+          echo "=== .env.example vars ==="
+          echo "$env_example_vars"
+          echo "=== Dockerfile vars ==="
+          echo "$dockerfile_vars"
+          # Compare
+          diff <(echo "$env_example_vars") <(echo "$dockerfile_vars") || {
+            echo "ERROR: Dockerfile ENV vars do not match .env.example"
+            exit 1
+          }
+          echo "All environment variables are in sync."
+
+      - name: Build Docker image
+        run: docker build -t ambient-server:ci .
