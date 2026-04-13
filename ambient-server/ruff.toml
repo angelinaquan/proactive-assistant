@@ -1,0 +1,19 @@
+# Ruff linter configuration for ambient-server
+# See https://docs.astral.sh/ruff/configuration/
+
+line-length = 120
+
+[lint]
+select = ["E", "F", "W"]
+ignore = [
+    "E402",   # Module-level import not at top of file (main.py layout, test mocking)
+]
+
+[lint.per-file-ignores]
+# Tests use sys.path/sys.modules manipulation before imports, and
+# often assign variables for setup without directly referencing them.
+"**/tests/*" = ["F401", "F811", "F841", "E402"]
+# extraction.py re-imports datetime inside a function for clarity
+"**/extraction.py" = ["F401", "F811"]
+# main.py imports CORSMiddleware for future use
+"**/main.py" = ["F401"]
