@@ -26,7 +26,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio
+          pip install pytest pytest-asyncio "httpx<0.28"
 
       - name: Create .env for tests
         run: |
